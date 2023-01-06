@@ -4,6 +4,8 @@ name: Build publish and staging
 
 env:
   AMBUDA_VERSION: v0.1
+  AMBUDA_HOST_IP: 0.0.0.0
+  AMBUDA_HOST_PORT: 5090
   
 on:
   # push:
