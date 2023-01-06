@@ -3,15 +3,13 @@
 name: Publish Ambuda image
 env:
   AMBUDA_VERSION: v0.1
-  AMBUDA_HOST_IP: 127.0.0.1
-  AMBUDA_HOST_PORT: 5090
 
 on:
-  push:
-    branches:
-      - 'main'
-    tags:
-      - 'v*'
+  # push:
+  #   branches:
+  #     - 'main'
+  #   tags:
+  #     - 'v*'
   pull_request:
     branches:
       - 'main'
@@ -19,7 +17,7 @@ on:
       - closed
 
 jobs:
-  if_merged:
+  pr_merged:
     if: github.event.pull_request.merged == true
     runs-on: ubuntu-22.04
     environment: staging
@@ -33,15 +31,6 @@ jobs:
           issue-number: ${{ github.event.pull_request.number }}
           body: ${{ post-pr-comment.md }}
 
-      - name: Print pull requests
-        - run: |
-          echo github.event.number = ${{ github.event.number  }}
-          echo github.event.pull_request.number = 
-          echo github.event.issue.number = ${{ github.event.issue.number }}
-       - name: Create comment
-        uses: peter-evans/create-or-update-comment@v2
-        with: 
-          issue-number:  
       - name: Extract metadata (tags, labels) for Docker
         id: meta
         uses: docker/metadata-action@v4
@@ -54,37 +43,6 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,event=push,value=v0.1-{{branch}}-{{sha}}
-      
-      - name: Build and push Docker images
-        id: publish
-        uses: docker/build-push-action@v3.2.0
-        with:
-          context: .
-          file: build/containers/Dockerfile.final
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-      
-      - name: Run SQL db setup
-        id: dbsetup
-        run: docker compose -f deploy/local/docker-compose-dbsetup.yml up
-        env:
-          AMBUDA_IMAGE: ${{ fromJSON(steps.meta.outputs.json).tags[1] }}
-          
-      - name: Run Docker images
-        id: deploy
-        run: docker compose -f deploy/local/docker-compose.yml up --detach
-        env:
-          AMBUDA_IMAGE: ${{ fromJSON(steps.meta.outputs.json).tags[1] }}
-          
-      - name: Check that site is running
-        run: timeout 2m bash -c "until curl --fail-with-body $AMBUDA_HOST_IP:$AMBUDA_HOST_PORT; do sleep 1; done"
-        
-      - name: Show logs on fail
-        if: ${{ failure() }}
-        run: docker compose -f deploy/local/docker-compose.yml logs
-        env:
-          AMBUDA_IMAGE: ${{ fromJSON(steps.meta.outputs.json).tags[1] }}
 
       - name: Extract Image tag
         shell: bash
@@ -98,9 +56,9 @@ jobs:
           name: image-name
           path: image-name
 
-  run_staging:
-    name: Run staging deploy
-    needs: push_to_registries
+  stop_staging:
+    name: Stop staging deploy
+    needs: pr_merged
     runs-on: [self-hosted, staging, linux]
     environment: staging
     steps:
@@ -113,13 +71,8 @@ jobs:
         shell: bash
         run: |
           echo "AMBUDA_IMAGE=`cat image-name`" >> $GITHUB_ENV
-          echo "AMBUDA_IMAGE_TAG=${AMBUDA_IMAGE#ghcr.io/kvchitrapu/ambuda:}" >> $GITHUB_ENV
           cat image-name
 
-      - name: Start the deploy job
+      - name: Stop the deploy job
         id: stagingdeploy
-        run: bash /home/ambuda-devbot/bin/ambuda-runner -i ${{ env.AMBUDA_IMAGE }} -s
-#        env:
-#          AMBUDA_IMAGE: ${{ env.AMBUDA_IMAGE }}
-#          AMBUDA_IMAGE_TAG: ${{ env.AMBUDA_IMAGE_TAG }}
-      
+        run: bash /home/ambuda-devbot/bin/ambuda-runner -i ${{ env.AMBUDA_IMAGE }} -x

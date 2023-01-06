@@ -5,11 +5,11 @@ env:
   AMBUDA_VERSION: v0.1
   
 on:
-  push:
-    branches:
-      - 'main'
-    tags:
-      - 'v*'
+  # push:
+  #   branches:
+  #     - 'main'
+  #   tags:
+  #     - 'v*'
   pull_request:
     branches:
       - 'main'
