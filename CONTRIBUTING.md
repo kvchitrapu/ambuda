@@ -47,10 +47,9 @@ Patch standards:
 
 - Fork from https://github.com/ambuda-org/ambuda/
 
-- Make code changes
+- Make code changes and commit
 
-- Submit a PR
-
+- Submit a PR to `fork-landing` upstream branch
 
 ### Setting up your dev environment
 
