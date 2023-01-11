@@ -6,6 +6,7 @@ env:
   AMBUDA_VERSION: v0.1
   AMBUDA_HOST_IP: 127.0.0.1
   AMBUDA_HOST_PORT: 5000
+  REGISTRY: ghcr.io
   
 on:
   pull_request:
@@ -15,7 +16,7 @@ on:
 
 jobs:
   build_and_test:
-    name: Push Ambuda image to GH container registry
+    name: Build external pr image
     runs-on: ubuntu-22.04
     environment: staging
     permissions:
@@ -32,31 +33,30 @@ jobs:
           images: |
             ${{ env.REGISTRY }}/${{ github.repository }}
           tags: |
-            type=ref,event=branch,value=v0.1-{{branch}}-{{sha}}
-            type=raw,event=pr,value=pr-{{github.event.pull_request.number}}-{{sha}}
-            type=raw,event=push,value=v0.1-{{branch}}-{{sha}}
-      
+            type=raw,event=pr,value=v0.1-pr${{ github.event.pull_request.number }}-{{sha}}
+
       - name: Build and Test docker image
         id: build-to-test
         uses: docker/build-push-action@v3.2.0
         with:
           context: .
           file: build/containers/Dockerfile.final
-          push: false
+          push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
       
       - name: Run SQL db setup
         id: dbsetup
-        run: docker compose -f deploy/local/docker-compose-dbsetup.yml up
+        run: |
+          echo "AMBUDA_IMAGE=${{ fromJSON(steps.meta.outputs.json).tags[0] }}" >> $GITHUB_ENV
+          docker compose -f deploy/local/docker-compose-dbsetup.yml up
         env:
-          AMBUDA_IMAGE: ${{ fromJSON(steps.meta.outputs.json).tags[1] }}
+          AMBUDA_IMAGE: ${{ fromJSON(steps.meta.outputs.json).tags[0] }}
           
       - name: Run Docker images
         id: deploy
         run: docker compose -f deploy/local/docker-compose.yml up --detach
         env:
-          AMBUDA_IMAGE: ${{ fromJSON(steps.meta.outputs.json).tags[1] }}
           AMBUDA_HOST_IP: 0.0.0.0
           
       - name: Check that site is running
@@ -65,13 +65,11 @@ jobs:
       - name: Show logs on fail
         if: ${{ failure() }}
         run: docker compose -f deploy/local/docker-compose.yml logs
-        env:
-          AMBUDA_IMAGE: ${{ fromJSON(steps.meta.outputs.json).tags[1] }}
 
   pr_commented:
     # This job only runs on PR open or reopen
     name: PR comment
-    needs: build_and_test_image
+    needs: build_and_test
     if: ${{ github.event.issue.pull_request.opened || github.event.issue.pull_request.reopened }}
     runs-on: ubuntu-latest
     steps:
