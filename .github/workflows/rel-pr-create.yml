@@ -20,7 +20,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      pr_number: ${{ steps.find_pr.outputs.PR_NUMBER }}
+      PR_NUMBER: ${{ steps.find_pr.outputs.PR_NUMBER }}
     steps:
       - uses: actions/checkout@v3
         with:
@@ -41,7 +41,8 @@ jobs:
       contents: write
     needs: get_dev_pr 
     if: needs.get_dev_pr.outputs.PR_NUMBER != ''
-
+    env:
+      PR_NUMBER: ${{ needs.get_dev_pr.outputs.PR_NUMBER }}
     steps:
       - uses: actions/checkout@v3
         with:
