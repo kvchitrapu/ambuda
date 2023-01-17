@@ -1,13 +1,15 @@
 # Ambuda workflow to build and publish docker image
+name: Create Release PR on seeing new code 
 
 env:
+  GH_TOKEN: ${{ github.token }}
   PR_SOURCE_BRANCH: development
   PR_TARGET_BRANCH: releases
 
-name: Create Release PR on seeing new code 
 on:
+  workflow_dispatch:
   schedule:
-    - cron: '0 10 * * *'
+    - cron: '*/10 * * * *'
   
 jobs:
 
@@ -15,28 +17,34 @@ jobs:
     runs-on: ubuntu-22.04
     environment: staging
     permissions:
-      packages: write
       contents: read
+    outputs:
+      pr_number: ${{ steps.find_pr.outputs.PR_NUMBER }}
     steps:
-      - name: Check out the repo
-        uses: actions/checkout@v3
-
+      - uses: actions/checkout@v3
+        with:
+          ref: ${{ env.PR_TARGET_BRANCH }}  
       - name: Find the recent PR merge on development
+        id: find_pr
         run: |
-        PR_NUMBER=`gh pr list --state merged --base ${{ env.PR_SOURCE_BRANCH }} -L 1 --json number| jq '.[].number'`
-        if [ ! -z "$PR_NUMBER" -a "$PR_NUMBER" != " " ]; then
-          echo "PR_NUMBER=$PR_NUMBER" >> $GITHUB_ENV
-        else
-          echo "PR_NUMBER=-1" >> $GITHUB_ENV
-        fi
+          LAST_RUNTIME=$(date +'%Y-%m-%dT%H:%M:%S' --date '-10 min')
+          gh repo set-default kvchitrapu/ambuda
+          echo "PR_NUMBER=$(gh pr list --state merged --base ${{ env.PR_SOURCE_BRANCH }} --search "merged:>$LAST_RUNTIME" -L 1 --json number| jq '.[].number')" >> $GITHUB_OUTPUT
 
   create_pr:
-    name: Create PR on base branch releases
+    runs-on: ubuntu-22.04
+    name: Create PR on releases branch
+    environment: staging
+    permissions:
+      packages: write
+      contents: write
     needs: get_dev_pr 
-    if: needs.get_dev_pr.output.PR_NUMBER != "-1"
-    - uses: actions/checkout@v3
+    if: needs.get_dev_pr.outputs.PR_NUMBER != ''
+
+    steps:
+      - uses: actions/checkout@v3
         with:
-          ref: ${{ env.PR_TARGET_BRANCH }}
+          ref: ${{ env.PR_TARGET_BRANCH }}  
       - name: Reset promotion branch
         run: |
           git fetch origin ${{ env.PR_SOURCE_BRANCH }}:${{ env.PR_SOURCE_BRANCH }}
@@ -44,4 +52,7 @@ jobs:
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v4
         with:
-          branch: releases-${{ env.PR_NUMBER }}
+          branch: releases
+          title: PR-${{ env.PR_NUMBER }} - merge
+          body:  development/PR-${{ env.PR_NUMBER }} merge is open
+
