@@ -55,4 +55,3 @@ jobs:
           branch: releases
           title: PR-${{ env.PR_NUMBER }} - merge
           body:  development/PR-${{ env.PR_NUMBER }} merge is open
-
