@@ -339,6 +339,7 @@ def replace(slug):
         project=project_,
         form=form,
         query=query,
+        update=update,
         results=results,
     )
 
