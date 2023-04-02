@@ -66,11 +66,13 @@ install-frontend:
 	npm install
 	make css-prod js-prod
 
-# Install Python dependencies.
-install-python:
+.PHONY: check-poetry install-python
+check-poetry:
+	@command -v poetry > /dev/null || { echo >&2 "Poetry is not installed. Please visit https://python-poetry.org/docs/#installation for installation instructions."; exit 1; }
+
+install-python: check-poetry
 	python3 -m venv env
-	. env/bin/activate; pip install --upgrade pip
-	. env/bin/activate; pip install -r requirements.txt
+	. env/bin/activate; poetry install
 
 # Fetch and build all i18n files.
 install-i18n: py-venv-check
@@ -136,7 +138,7 @@ devserver: py-venv-check
 # Run a local Celery instance for background tasks.
 celery: 
 	celery -A ambuda.tasks worker --loglevel=INFO
-
+	
 
 # Docker commands
 # ===============================================
