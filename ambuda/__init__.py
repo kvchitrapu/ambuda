@@ -103,7 +103,7 @@ def create_app(config_env: str):
     assert config_env == config_spec.AMBUDA_ENVIRONMENT
     if config_env != config.TESTING:
         with app.app_context():
-            checks.check_database(config_spec.SQLALCHEMY_DATABASE_URI)
+            checks.check_database_uri(config_spec.SQLALCHEMY_DATABASE_URI)
 
     # Logger
     _initialize_logger(config_spec.LOG_LEVEL)
@@ -111,12 +111,12 @@ def create_app(config_env: str):
     # Database
     _initialize_db_session(app, config_env)
 
-    # Extensions
-    babel = Babel(app)
-
-    @babel.localeselector
+    # A custom Babel locale_selector.
     def get_locale():
         return session.get("locale", config_spec.BABEL_DEFAULT_LOCALE)
+
+    # Extensions
+    Babel(app, locale_selector=get_locale)
 
     login_manager = auth_manager.create_login_manager()
     login_manager.init_app(app)
@@ -141,7 +141,7 @@ def create_app(config_env: str):
     app.register_blueprint(texts, url_prefix="/texts")
 
     # Debug-only routes for local development.
-    if app.debug:
+    if app.debug or config.TESTING:
         from ambuda.views.debug import bp as debug_bp
 
         app.register_blueprint(debug_bp, url_prefix="/debug")
