@@ -10,7 +10,7 @@ Before you begin
 ----------------
 
 We recommend using the latest version of Python. At a mininum, Ambuda requires
-Python 3.9.
+Python 3.10.
 
 We also recommend having a recent version of `npm`. We use `npm` to fetch our
 Tailwind watcher, which generates CSS based on changes to our HTML files. (We
@@ -79,7 +79,7 @@ Docker setup (beta)
 This feature is still under development and may change. You can alternatively
 run a local development environment using Docker by running:
 
-    make start-docker
+    make docker-start
 
 
 Data dependencies
