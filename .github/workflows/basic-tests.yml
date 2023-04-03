@@ -34,7 +34,7 @@ jobs:
           cache: 'poetry'
 
       - name: Install dependencies and cache
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: ~/.cache/pypoetry
           key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
@@ -78,7 +78,7 @@ jobs:
           cache: 'poetry'
 
       - name: Install dependencies and cache
-        uses: actions/cache@v2
+        uses: actions/cache@v3
         with:
           path: ~/.cache/pypoetry
           key: ${{ runner.os }}-poetry-${{ hashFiles('**/poetry.lock') }}
