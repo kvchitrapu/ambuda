@@ -1,4 +1,4 @@
-from typing import Iterable
+from collections.abc import Iterable
 
 from flask_login import AnonymousUserMixin, UserMixin
 
@@ -8,7 +8,7 @@ from ambuda.enums import SiteRole
 class AmbudaAnonymousUser(AnonymousUserMixin):
     """An anonymous user with limited permissions."""
 
-    def has_role(self, *a):
+    def has_role(self, _role: SiteRole):
         return False
 
     @property
