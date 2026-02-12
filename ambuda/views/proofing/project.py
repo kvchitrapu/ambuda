@@ -4,6 +4,7 @@ import logging
 import re
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import sqlalchemy as sqla
@@ -27,6 +28,8 @@ from sqlalchemy import orm, select
 from werkzeug.exceptions import abort
 from werkzeug.utils import redirect
 from wtforms import (
+    FileField,
+    RadioField,
     SelectField,
     StringField,
 )
@@ -49,6 +52,11 @@ from ambuda.utils.llm_prompts import PRESET_PROMPTS
 from ambuda.utils.project_structuring import ProofBlock, ProofPage, ProofProject
 from ambuda.utils.revisions import add_revision
 from ambuda.views.proofing.decorators import moderator_required, p2_required
+from ambuda.views.proofing.main import (
+    _is_allowed_document_file,
+    _required_if_url,
+    _required_if_local,
+)
 from ambuda.views.proofing.stats import calculate_stats
 
 bp = Blueprint("project", __name__)
@@ -192,6 +200,25 @@ class EditMetadataForm(FlaskForm):
 
 class DeleteProjectForm(FlaskForm):
     slug = StringField("Slug", validators=[DataRequired()])
+
+
+class ReplacePdfForm(FlaskForm):
+    pdf_source = RadioField(
+        "Source",
+        choices=[
+            ("url", "Upload from a URL"),
+            ("local", "Upload from my computer"),
+        ],
+        validators=[DataRequired()],
+    )
+    pdf_url = StringField(
+        "PDF URL",
+        validators=[_required_if_url("Please provide a valid PDF URL.")],
+    )
+    local_file = FileField(
+        "PDF file",
+        validators=[_required_if_local("Please provide a PDF file.")],
+    )
 
 
 @bp.route("/<slug>/")
@@ -946,6 +973,71 @@ def batch_llm_status(task_id):
     )
 
 
+@bp.route("/<slug>/reorder-pages", methods=["GET", "POST"])
+@p2_required
+def reorder_pages(slug):
+    """Reorder the pages in a project."""
+    project_ = q.project(slug)
+    if project_ is None:
+        abort(404)
+
+    assert project_
+    if request.method == "POST":
+        data = request.get_json()
+        if not data or "page_ids" not in data:
+            return jsonify({"error": "No page_ids provided"}), 400
+
+        page_ids = data["page_ids"]
+        project_page_ids = {p.id for p in project_.pages}
+        if set(page_ids) != project_page_ids:
+            return jsonify({"error": "Invalid page IDs"}), 400
+
+        image_uuids = data.get("image_uuids")
+        if image_uuids is not None:
+            project_uuids = {p.uuid for p in project_.pages}
+            if set(image_uuids) != project_uuids:
+                return jsonify({"error": "Invalid image UUIDs"}), 400
+
+        session = q.get_session()
+        order_mapping = {page_id: i for i, page_id in enumerate(page_ids)}
+        session.execute(
+            sqla.update(db.Page)
+            .where(db.Page.id.in_(page_ids))
+            .values(order=sqla.case(order_mapping, value=db.Page.id))
+        )
+        if image_uuids is not None:
+            tmp_mapping = {pid: f"tmp-{pid}" for pid in page_ids}
+            uuid_mapping = dict(zip(page_ids, image_uuids))
+            for mapping in [tmp_mapping, uuid_mapping]:
+                session.execute(
+                    sqla.update(db.Page)
+                    .where(db.Page.id.in_(page_ids))
+                    .values(uuid=sqla.case(mapping, value=db.Page.id))
+                )
+        session.commit()
+        return jsonify({"ok": True})
+
+    pages_data = []
+    for page in project_.pages:
+        latest = page.revisions[-1] if page.revisions else None
+        preview = latest.content[:200] if latest else ""
+        pages_data.append(
+            {
+                "id": page.id,
+                "slug": page.slug,
+                "uuid": page.uuid,
+                "order": page.order,
+                "preview": preview,
+            }
+        )
+
+    return render_template(
+        "proofing/projects/reorder.html",
+        project=project_,
+        pages_data=pages_data,
+    )
+
+
 @bp.route("/<slug>/admin", methods=["GET", "POST"])
 @moderator_required
 def admin(slug):
@@ -977,4 +1069,74 @@ def admin(slug):
         "proofing/projects/admin.html",
         project=project_,
         form=form,
+    )
+
+
+@bp.route("/<slug>/replace-pdf", methods=["GET", "POST"])
+@p2_required
+def replace_pdf(slug):
+    project_ = q.project(slug)
+    if project_ is None:
+        abort(404)
+
+    form = ReplacePdfForm()
+    if not form.validate_on_submit():
+        return render_template(
+            "proofing/projects/replace-pdf.html",
+            project=project_,
+            form=form,
+        )
+
+    pdf_source = form.pdf_source.data
+
+    if pdf_source == "url":
+        pdf_url = form.pdf_url.data
+        task = project_tasks.replace_project_pdf_from_url.delay(
+            project_slug=slug,
+            pdf_url=pdf_url,
+            app_environment=current_app.config["AMBUDA_ENVIRONMENT"],
+        )
+    else:
+        filename = form.local_file.raw_data[0].filename
+        if not _is_allowed_document_file(filename):
+            flash("Please upload a PDF.")
+            return render_template(
+                "proofing/projects/replace-pdf.html",
+                project=project_,
+                form=form,
+            )
+
+        file_data = form.local_file.data
+        file_data.seek(0, 2)
+        size = file_data.tell()
+        file_data.seek(0)
+        if size > 128 * 1024 * 1024:
+            flash("PDF must be under 128 MB.")
+            return render_template(
+                "proofing/projects/replace-pdf.html",
+                project=project_,
+                form=form,
+            )
+
+        upload_dir = Path(current_app.config["UPLOAD_FOLDER"]) / "pdf-upload"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+
+        temp_id = str(uuid.uuid4())
+        pdf_path = upload_dir / f"{temp_id}.pdf"
+        form.local_file.data.save(pdf_path)
+
+        task = project_tasks.replace_project_pdf.delay(
+            project_slug=slug,
+            pdf_path=str(pdf_path),
+            app_environment=current_app.config["AMBUDA_ENVIRONMENT"],
+        )
+
+    return render_template(
+        "proofing/projects/replace-pdf-post.html",
+        project=project_,
+        status=task.status,
+        current=0,
+        total=0,
+        percent=0,
+        task_id=task.id,
     )

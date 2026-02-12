@@ -64,7 +64,12 @@ def _split_pdf_into_pages(
 
 
 def _add_project_to_database(
-    session, display_title: str, slug: str, page_uuids: list[str], creator_id: int
+    session,
+    display_title: str,
+    slug: str,
+    page_uuids: list[str],
+    creator_id: int,
+    source_url: str | None = None,
 ):
     """Create a project on the database.
 
@@ -80,7 +85,12 @@ def _add_project_to_database(
     session.add(board)
     session.flush()
 
-    project = db.Project(slug=slug, display_title=display_title, creator_id=creator_id)
+    project = db.Project(
+        slug=slug,
+        display_title=display_title,
+        creator_id=creator_id,
+        source_url=source_url,
+    )
     project.board_id = board.id
     session.add(project)
     session.flush()
@@ -111,6 +121,7 @@ def create_project_from_local_pdf_inner(
     app_environment: str,
     creator_id: int,
     task_status: TaskStatus,
+    source_url: str | None = None,
     engine=None,
 ):
     """Split a local PDF into pages and register the project on the database.
@@ -159,6 +170,7 @@ def create_project_from_local_pdf_inner(
             slug=slug,
             page_uuids=page_uuids,
             creator_id=creator_id,
+            source_url=source_url,
         )
 
         # Move assets to s3.
@@ -220,6 +232,7 @@ def create_project_from_local_pdf(
     display_title: str | None = None,
     creator_id: int,
     app_environment: str,
+    source_url: str | None = None,
 ):
     """Split a local PDF into pages and register the project on the database.
 
@@ -232,6 +245,7 @@ def create_project_from_local_pdf(
         creator_id=creator_id,
         task_status=task_status,
         app_environment=app_environment,
+        source_url=source_url,
     )
 
 
@@ -269,6 +283,7 @@ def create_project_from_url_inner(
             app_environment=app_environment,
             creator_id=creator_id,
             task_status=task_status,
+            source_url=pdf_url,
             engine=engine,
         )
     except Exception as e:
@@ -624,6 +639,151 @@ def regenerate_project_pages(
     task_status = CeleryTaskStatus(self)
     regenerate_project_pages_inner(
         project_slug=project_slug,
+        app_environment=app_environment,
+        task_status=task_status,
+    )
+
+
+def replace_project_pdf_inner(
+    *,
+    project_slug: str,
+    pdf_path: str,
+    app_environment: str,
+    task_status: TaskStatus,
+    source_url: str | None = None,
+    engine=None,
+):
+    """Replace the source PDF of an existing project.
+
+    :param project_slug: slug identifying the project.
+    :param pdf_path: local path to the replacement PDF.
+    :param app_environment: the app environment, e.g. ``"development"``.
+    :param task_status: tracks progress on the task.
+    :param engine: optional SQLAlchemy engine for tests.
+    """
+    with get_db_session(app_environment, engine=engine) as (session, query, config_obj):
+        stmt = select(db.Project).filter_by(slug=project_slug)
+        project = session.scalars(stmt).first()
+        if not project:
+            raise ValueError(f'Project "{project_slug}" not found.')
+
+        pages_stmt = (
+            select(db.Page).filter_by(project_id=project.id).order_by(db.Page.order)
+        )
+        existing_pages = list(session.scalars(pages_stmt).all())
+
+        doc = fitz.open(pdf_path)
+        new_count = doc.page_count
+        existing_count = len(existing_pages)
+        total_work = new_count + 1
+        task_status.progress(0, total_work)
+
+        s3_bucket = config_obj.S3_BUCKET
+        temp_dir = Path(tempfile.mkdtemp(prefix=f"ambuda_replace_{project_slug}_"))
+
+        try:
+            for i in range(min(new_count, existing_count)):
+                page_obj = existing_pages[i]
+                image_path = temp_dir / f"{page_obj.uuid}.jpg"
+                _save_page_image(doc[i], image_path)
+                if s3_bucket:
+                    page_obj.s3_path(s3_bucket).upload_file(str(image_path))
+                image_path.unlink()
+                task_status.progress(i + 1, total_work)
+
+            if new_count > existing_count:
+                if existing_pages:
+                    max_slug = max(
+                        int(p.slug) for p in existing_pages if p.slug.isdigit()
+                    )
+                    max_order = max(p.order for p in existing_pages)
+                else:
+                    max_slug = 0
+                    max_order = 0
+
+                unreviewed = session.scalars(
+                    select(db.PageStatus).filter_by(name="reviewed-0")
+                ).one()
+
+                for i in range(existing_count, new_count):
+                    offset = i - existing_count + 1
+                    page_uuid = str(uuid.uuid4())
+                    new_page = db.Page(
+                        project_id=project.id,
+                        slug=str(max_slug + offset),
+                        uuid=page_uuid,
+                        order=max_order + offset,
+                        status_id=unreviewed.id,
+                    )
+                    session.add(new_page)
+                    session.flush()
+
+                    image_path = temp_dir / f"{page_uuid}.jpg"
+                    _save_page_image(doc[i], image_path)
+                    if s3_bucket:
+                        new_page.s3_path(s3_bucket).upload_file(str(image_path))
+                    image_path.unlink()
+                    task_status.progress(i + 1, total_work)
+
+            if s3_bucket:
+                project.s3_path(s3_bucket).upload_file(pdf_path)
+
+            if source_url is not None:
+                project.source_url = source_url
+
+            session.commit()
+            task_status.progress(total_work, total_work)
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    task_status.success(new_count, project_slug)
+
+
+@app.task(bind=True)
+def replace_project_pdf(
+    self, *, project_slug, pdf_path, app_environment, source_url=None
+):
+    """Celery wrapper for `replace_project_pdf_inner`."""
+    task_status = CeleryTaskStatus(self)
+    replace_project_pdf_inner(
+        project_slug=project_slug,
+        pdf_path=pdf_path,
+        app_environment=app_environment,
+        task_status=task_status,
+        source_url=source_url,
+    )
+
+
+def replace_project_pdf_from_url_inner(
+    *, project_slug, pdf_url, app_environment, task_status, engine=None
+):
+    """Download a PDF from URL then delegate to `replace_project_pdf_inner`."""
+    temp_pdf_path = Path(tempfile.gettempdir()) / f"ambuda_replace_{uuid.uuid4()}.pdf"
+    try:
+        response = requests.get(pdf_url)
+        response.raise_for_status()
+        temp_pdf_path.write_bytes(response.content)
+
+        replace_project_pdf_inner(
+            project_slug=project_slug,
+            pdf_path=str(temp_pdf_path),
+            app_environment=app_environment,
+            task_status=task_status,
+            source_url=pdf_url,
+            engine=engine,
+        )
+    finally:
+        if temp_pdf_path.exists():
+            temp_pdf_path.unlink()
+
+
+@app.task(bind=True)
+def replace_project_pdf_from_url(self, *, project_slug, pdf_url, app_environment):
+    """Celery wrapper for `replace_project_pdf_from_url_inner`."""
+    task_status = CeleryTaskStatus(self)
+    replace_project_pdf_from_url_inner(
+        project_slug=project_slug,
+        pdf_url=pdf_url,
         app_environment=app_environment,
         task_status=task_status,
     )

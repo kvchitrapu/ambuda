@@ -1,0 +1,27 @@
+{% extends 'proofing/base-sidebar.html' %}
+{% import "macros/proofing.html" as m %}
+
+
+{% block title %}Replace PDF: {{ project.display_title }} | Ambuda{% endblock %}
+
+
+{% block content %}
+{{ m.project_header_nested('Replace PDF', project) }}
+
+<div class="prose">
+
+{% if percent < 100 %}
+<p>{% trans %}
+We are currently replacing the PDF for this project. If you accidentally close
+this page, don't worry: the replacement will still proceed.
+{% endtrans %}</p>
+{% endif %}
+
+{% set url = url_for('proofing.create_project_status', task_id=task_id) %}
+<div x-data="htmlPoller('{{ url }}')">
+  {% with current=current, total=total, percent=percent, slug=slug, status=status %}
+    {% include 'include/task-progress.html' %}
+  {% endwith %}
+</div>
+</div>
+{% endblock %}

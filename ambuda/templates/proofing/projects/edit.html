@@ -17,6 +17,8 @@
 {% set ocr_url = url_for("proofing.project.batch_ocr", slug=project.slug)  %}
 {% set editing_url = url_for("proofing.project.batch_editing", slug=project.slug)  %}
 {% set batch_llm_url = url_for("proofing.project.batch_llm", slug=project.slug)  %}
+{% set reorder_url = url_for("proofing.project.reorder_pages", slug=project.slug)  %}
+{% set replace_pdf_url = url_for("proofing.project.replace_pdf", slug=project.slug) %}
 
 <div class="prose">
 
@@ -25,6 +27,8 @@
   <li><a href="{{ editing_url }}">{{ _('Run batch editing') }}</a></li>
   {% if current_user.is_p2 %}
   <li><a href="{{ batch_llm_url }}">{{ _('Run batch LLM') }}</a></li>
+  <li><a href="{{ reorder_url }}">{{ _('Reorder pages') }}</a></li>
+  <li><a href="{{ replace_pdf_url }}">{{ _('Replace PDF') }}</a></li>
   {% endif %}
 </ul>
 
