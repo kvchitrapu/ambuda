@@ -48,17 +48,33 @@ def indent_xml_file_in_place(path: Path) -> None:
 
 @dataclass
 class ParsedTEIHeader:
-    title: str = "Unknown"
-    author: str = "Unknown"
-    editor: str = ""
-    publisher: str = "Unknown"
-    publisher_place: str = "Unknown"
-    publication_year: str = ""
-    availability: str = ""
-    source: str = ""
+    # Electronic text (from titleStmt / publicationStmt)
+    tei_title: str = "Unknown"
+    tei_author: str = "Unknown"
+    tei_publisher: str = ""
+    tei_publication_year: str = ""
+    tei_availability: str = ""
     credits: list[tuple[str, list[str]]] | None = None
     notes: str = ""
-    revision_desc: str = ""
+    revision_desc: list[dict] | None = None
+    # Source edition (from sourceDesc/bibl)
+    source_author: str = ""
+    source_editor: str = ""
+    source_publisher: str = ""
+    source_publisher_place: str = ""
+    source_publication_year: str = ""
+    source_citation: str = ""
+
+    @property
+    def has_source_info(self) -> bool:
+        return bool(
+            self.source_author
+            or self.source_editor
+            or self.source_publisher
+            or self.source_publisher_place
+            or self.source_publication_year
+            or self.source_citation
+        )
 
 
 @dataclass
@@ -424,28 +440,34 @@ def parse_tei_header(blob: str | None) -> ParsedTEIHeader:
     xml = DET.fromstring(blob)
 
     file_desc = xml.find("./fileDesc")
+
+    # publicationStmt
+    tei_publisher = _text_of(file_desc, "./publicationStmt/publisher", "")
+    tei_availability = ""
     availability_xml = file_desc.find("./publicationStmt/availability")
     if availability_xml is not None:
-        availability = transform(availability_xml, tei_header_xml)
-    else:
-        availability = ""
+        tei_availability = transform(availability_xml, tei_header_xml)
+    tei_publication_year = ""
+    pub_date_el = file_desc.find("./publicationStmt/date")
+    if pub_date_el is not None:
+        tei_publication_year = (
+            pub_date_el.get("when-iso", "")
+            or pub_date_el.get("when", "")
+            or pub_date_el.text
+            or ""
+        )
 
-    author = _text_of(file_desc, "./sourceDesc/bibl/author", "")
-    if not author:
-        author = _text_of(file_desc, "./titleStmt/author", "Unknown")
+    # titleStmt
+    author = _text_of(file_desc, "./titleStmt/author", "Unknown")
 
-    editor = _text_of(file_desc, "./sourceDesc/bibl/editor", "")
-
-    publication_year = _text_of(file_desc, "./sourceDesc/bibl/date", "")
-    if not publication_year:
-        pub_date_el = file_desc.find("./publicationStmt/date")
-        if pub_date_el is not None:
-            publication_year = pub_date_el.get("when-iso", "") or pub_date_el.text or ""
-
-    source = ""
+    # sourceDesc
+    source_author = _text_of(file_desc, "./sourceDesc/bibl/author", "")
+    source_editor = _text_of(file_desc, "./sourceDesc/bibl/editor", "")
+    source_publication_year = _text_of(file_desc, "./sourceDesc/bibl/date", "")
+    source_citation = ""
     bibl_el = file_desc.find("./sourceDesc/bibl")
     if bibl_el is not None and len(bibl_el) == 0:
-        source = (bibl_el.text or "").strip()
+        source_citation = (bibl_el.text or "").strip()
 
     credits = []
     for resp_stmt in file_desc.findall("./titleStmt/respStmt"):
@@ -459,6 +481,7 @@ def parse_tei_header(blob: str | None) -> ParsedTEIHeader:
         if resp_text or names:
             credits.append((resp_text, names))
 
+    # notesStmt
     notes = ""
     notes_stmt = file_desc.find("./notesStmt")
     if notes_stmt is not None:
@@ -470,24 +493,37 @@ def parse_tei_header(blob: str | None) -> ParsedTEIHeader:
             if notes:
                 break
 
-    revision_desc = ""
+    # revisionDesc
+    revision_entries = []
     rev_desc_el = xml.find("./revisionDesc")
     if rev_desc_el is not None:
-        rev_desc_el.tag = "div"
-        revision_desc = transform(rev_desc_el, tei_header_xml).strip()
+        for change_el in rev_desc_el.findall(".//change"):
+            date = change_el.get("when") or change_el.get("when-iso") or ""
+            who = change_el.get("who", "")
+            # Strip leading # from @who (TEI convention for internal references)
+            if who.startswith("#"):
+                who = who[1:]
+            description = "".join(change_el.itertext()).strip()
+            if description or date:
+                revision_entries.append(
+                    {"date": date, "who": who, "description": description}
+                )
 
     return ParsedTEIHeader(
-        title=_text_of(file_desc, "./titleStmt/title", "Unknown"),
-        author=author,
-        editor=editor,
-        publisher=_text_of(file_desc, "./sourceDesc/bibl/publisher", "Unknown"),
-        publisher_place=_text_of(file_desc, "./sourceDesc/bibl/pubPlace", "Unknown"),
-        publication_year=publication_year,
-        availability=availability,
-        source=source,
+        tei_title=_text_of(file_desc, "./titleStmt/title", "Unknown"),
+        tei_author=author,
+        tei_publisher=tei_publisher,
+        tei_publication_year=tei_publication_year,
+        tei_availability=tei_availability,
         credits=credits or None,
         notes=notes,
-        revision_desc=revision_desc,
+        revision_desc=revision_entries or None,
+        source_author=source_author,
+        source_editor=source_editor,
+        source_publisher=_text_of(file_desc, "./sourceDesc/bibl/publisher", ""),
+        source_publisher_place=_text_of(file_desc, "./sourceDesc/bibl/pubPlace", ""),
+        source_publication_year=source_publication_year,
+        source_citation=source_citation,
     )
 
 

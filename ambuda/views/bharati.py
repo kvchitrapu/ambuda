@@ -185,6 +185,131 @@ GLOSSES = {
 }
 
 
+# Reverse mappings: English parse terms → vidyut enums.
+# These reverse the mappings in ambuda/utils/word_parses.py so we can filter
+# kosha entries by a human-readable parse string.
+_GENDER_TO_LINGA = {
+    "masculine": Linga.Pum,
+    "feminine": Linga.Stri,
+    "neuter": Linga.Napumsaka,
+}
+_CASE_TO_VIBHAKTI = {
+    "nominative": Vibhakti.Prathama,
+    "accusative": Vibhakti.Dvitiya,
+    "instrumental": Vibhakti.Trtiya,
+    "dative": Vibhakti.Caturthi,
+    "ablative": Vibhakti.Panchami,
+    "genitive": Vibhakti.Sasthi,
+    "locative": Vibhakti.Saptami,
+    "vocative": Vibhakti.Sambodhana,
+}
+_NUMBER_TO_VACANA = {
+    "singular": Vacana.Eka,
+    "dual": Vacana.Dvi,
+    "plural": Vacana.Bahu,
+}
+_PERSON_TO_PURUSHA = {
+    "third-person": Purusha.Prathama,
+    "second-person": Purusha.Madhyama,
+    "first-person": Purusha.Uttama,
+}
+_LAKARA_TO_ENUM = {
+    "present": Lakara.Lat,
+    "perfect": Lakara.Lit,
+    "periphrastic future": Lakara.Lut,
+    "simple future": Lakara.Lrt,
+    "imperative": Lakara.Lot,
+    "imperfect": Lakara.Lan,
+    "imperfect (unaugmented)": Lakara.Lan,
+    "optative": Lakara.VidhiLin,
+    "benedictive": Lakara.AshirLin,
+    "aorist": Lakara.Lun,
+    "aorist (unaugmented)": Lakara.Lun,
+    "conditional": Lakara.Lrn,
+}
+
+
+def _parse_en_parse(parse_str: str) -> dict:
+    """Parse an English parse string into structured grammar components.
+
+    Examples:
+        "noun, masculine nominative singular"
+          → {'pos': 'noun', 'linga': Linga.Pum, 'vibhakti': Vibhakti.Prathama, 'vacana': Vacana.Eka}
+        "verb, third-person singular present"
+          → {'pos': 'verb', 'purusha': Purusha.Prathama, 'vacana': Vacana.Eka, 'lakara': Lakara.Lat}
+        "indeclinable"
+          → {'pos': 'indeclinable'}
+    """
+    result = {}
+    if not parse_str:
+        return result
+
+    parts = parse_str.split(", ", 1)
+    pos = parts[0]
+    result["pos"] = pos
+
+    if len(parts) < 2:
+        return result
+
+    sub = parts[1]
+    if pos in ("noun", "adjective", "participle"):
+        if sub == "compounded":
+            result["compounded"] = True
+        else:
+            words = sub.split()
+            if len(words) >= 3:
+                result["linga"] = _GENDER_TO_LINGA.get(words[0])
+                result["vibhakti"] = _CASE_TO_VIBHAKTI.get(words[1])
+                result["vacana"] = _NUMBER_TO_VACANA.get(words[2])
+    elif pos == "verb":
+        words = sub.split()
+        if len(words) >= 3:
+            result["purusha"] = _PERSON_TO_PURUSHA.get(words[0])
+            result["vacana"] = _NUMBER_TO_VACANA.get(words[1])
+            result["lakara"] = _LAKARA_TO_ENUM.get(" ".join(words[2:]))
+
+    return result
+
+
+def _filter_kosha_entries(entries: list, lemma_slp1: str, parse_info: dict) -> list:
+    """Filter kosha entries by lemma and parsed grammar info."""
+    filtered = []
+    pos = parse_info.get("pos", "")
+
+    for entry in entries:
+        if isinstance(entry, PadaEntry.Subanta):
+            if pos == "verb":
+                continue
+            if not parse_info.get("compounded"):
+                if parse_info.get("linga") and entry.linga != parse_info["linga"]:
+                    continue
+                if (
+                    parse_info.get("vibhakti")
+                    and entry.vibhakti != parse_info["vibhakti"]
+                ):
+                    continue
+                if parse_info.get("vacana") and entry.vacana != parse_info["vacana"]:
+                    continue
+            if lemma_slp1 and entry.lemma != lemma_slp1:
+                continue
+            filtered.append(entry)
+
+        elif isinstance(entry, PadaEntry.Tinanta):
+            if pos in ("noun", "adjective", "participle"):
+                continue
+            if parse_info.get("purusha") and entry.purusha != parse_info["purusha"]:
+                continue
+            if parse_info.get("vacana") and entry.vacana != parse_info["vacana"]:
+                continue
+            if parse_info.get("lakara") and entry.lakara != parse_info["lakara"]:
+                continue
+            if lemma_slp1 and entry.lemma != lemma_slp1:
+                continue
+            filtered.append(entry)
+
+    return filtered
+
+
 @bp.app_template_test("subanta")
 def is_vidyut_subanta(x):
     return isinstance(x, PadaEntry.Subanta)

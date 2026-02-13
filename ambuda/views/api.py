@@ -20,7 +20,7 @@ from flask import (
 )
 from flask_login import current_user, login_required
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import orm, select
 from vidyut.lipi import Scheme
 
 from ambuda import database as db
@@ -367,6 +367,45 @@ def reader_json(text_slug, section_slug):
     return jsonify(data)
 
 
+@bp.route("/translations/<translation_slug>/<section_slug>")
+def translation_blocks(translation_slug, section_slug):
+    """Return translation block HTML keyed by source block slug."""
+    translation_text = q.text(translation_slug)
+    if translation_text is None or translation_text.parent_id is None:
+        abort(404)
+
+    source_text_id = translation_text.parent_id
+
+    db_session = q.get_session()
+    block_load = orm.selectinload(db.TextSection.blocks)
+    children_load = block_load.selectinload(db.TextBlock.children)
+
+    stmt = (
+        select(db.TextSection)
+        .filter_by(text_id=source_text_id, slug=section_slug)
+        .options(block_load, children_load)
+    )
+    source_section = db_session.scalars(stmt).first()
+    if source_section is None:
+        return jsonify({})
+
+    result = {}
+    for block in source_section.blocks:
+        matching = [c for c in block.children if c.text_id == translation_text.id]
+        if matching:
+            html_parts = [xml.transform_text_block(c.xml) for c in matching]
+            result[block.slug] = "".join(html_parts)
+
+    scheme = _scheme_from_session()
+    if scheme != Scheme.Devanagari:
+        for slug in result:
+            result[slug] = xml.transliterate_html(
+                result[slug], Scheme.Devanagari, scheme
+            )
+
+    return jsonify(result)
+
+
 @bp.route("/bookmarks/toggle", methods=["POST"])
 def toggle_bookmark():
     """Toggle a bookmark on a text block."""
@@ -452,6 +491,128 @@ def bharati_query(query):
 
     entries = _get_kosha_entries(query)
     return render_template("htmx/bharati-query.html", query=query, entries=entries)
+
+
+@bp.route("/bharati/grammar")
+def bharati_grammar():
+    """Return kosha entries filtered by form, lemma, and parse."""
+    from vidyut.lipi import Scheme, detect, transliterate
+
+    from ambuda.views.bharati import (
+        _filter_kosha_entries,
+        _get_kosha_entries,
+        _parse_en_parse,
+    )
+
+    form = request.args.get("form", "").strip()
+    lemma = request.args.get("lemma", "").strip()
+    parse = request.args.get("parse", "").strip()
+
+    if not form:
+        return render_template("htmx/bharati-grammar.html", entries=[])
+
+    entries = _get_kosha_entries(form)
+
+    lemma_scheme = detect(lemma) or Scheme.HarvardKyoto
+    lemma_slp1 = transliterate(lemma, lemma_scheme, Scheme.Slp1)
+
+    parse_info = _parse_en_parse(parse)
+    filtered = _filter_kosha_entries(entries, lemma_slp1, parse_info)
+
+    return render_template("htmx/bharati-grammar.html", entries=filtered)
+
+
+@bp.route("/bharati/dhatu/<dhatu_spec>")
+def bharati_dhatu_fragment(dhatu_spec):
+    """Return an HTML fragment with dhatu conjugation tables."""
+    from vidyut.lipi import Scheme, detect, transliterate
+
+    from ambuda.views.bharati import (
+        _create_lakara_table,
+        get_dhatu_entries,
+    )
+    from vidyut.prakriya import DhatuPada, Lakara, Prayoga
+
+    input_scheme = detect(dhatu_spec) or Scheme.Slp1
+    dhatu_key = transliterate(dhatu_spec, input_scheme, Scheme.Slp1)
+    dhatu_key = dhatu_key.replace("^", "").replace("\\", "")
+
+    dhatu_map = get_dhatu_entries()
+    dhatu_entry = dhatu_map.get(dhatu_key)
+    if not dhatu_entry:
+        return "<p class='text-slate-400 text-sm'>No root data available.</p>"
+
+    dhatu = dhatu_entry.dhatu
+    tinantas = []
+    for la in [
+        Lakara.Lat,
+        Lakara.Lit,
+        Lakara.Lut,
+        Lakara.Lrt,
+        Lakara.Lot,
+        Lakara.Lan,
+        Lakara.VidhiLin,
+        Lakara.AshirLin,
+        Lakara.Lun,
+    ]:
+        lakara = []
+        for pada in [DhatuPada.Parasmaipada, DhatuPada.Atmanepada]:
+            lakara.append(
+                _create_lakara_table(
+                    dhatu, lakara=la, prayoga=Prayoga.Kartari, pada=pada
+                )
+            )
+        tinantas.append(lakara)
+
+    return render_template(
+        "htmx/bharati-dhatu.html",
+        dhatu_entry=dhatu_entry,
+        tinantas=tinantas,
+    )
+
+
+@bp.route("/bharati/krt/<krt_value>")
+def bharati_krt_fragment(krt_value):
+    """Return an HTML fragment with krt suffix information."""
+    from vidyut.lipi import Scheme, transliterate
+
+    from ambuda.views.bharati import KRT_ANUBANDHAS
+    from vidyut.prakriya import Krt
+
+    krt_slp = transliterate(krt_value, Scheme.Slp1, Scheme.Slp1)
+    try:
+        krt = Krt(krt_slp)
+    except ValueError:
+        return "<p class='text-slate-400 text-sm'>No suffix data available.</p>"
+
+    anubandhas = krt.anubandhas()
+    if "yu~" in krt_slp or "vu~" in krt_slp:
+        anubandhas = [x for x in anubandhas if str(x) != "udit"]
+    if "vi~" in krt_slp:
+        anubandhas = [x for x in anubandhas if str(x) != "idit"]
+
+    meanings = []
+    for a in anubandhas:
+        raw_messages = KRT_ANUBANDHAS.get(str(a), [("(no information found)", "--")])
+        messages = []
+        for message, code in raw_messages:
+            message = message.replace("[[", "`").replace("]]", "`")
+            fragments = message.split("`")
+            buf = []
+            for i, fragment in enumerate(fragments):
+                if i % 2 == 0:
+                    buf.append(fragment)
+                else:
+                    buf.append(transliterate(fragment, Scheme.Slp1, Scheme.Devanagari))
+            message = "".join(buf)
+            messages.append((message, code))
+        meanings.append((a, messages))
+
+    return render_template(
+        "htmx/bharati-krt.html",
+        krt=krt,
+        meanings=meanings,
+    )
 
 
 # ---------------------------------------------------------------------------

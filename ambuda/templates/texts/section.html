@@ -40,15 +40,6 @@ For the corresponding JavaScript bindings and logic, see `reader.js`.
     {% endif %}
   </div>
 
-  {% if has_no_parse %}
-  <p lang="en" class="text-center text-xs text-zinc-400 mt-2 mb-4">
-    {{ _('This text does not support clickable word meanings.') }}
-  </p>
-  {% else %}
-  <p lang="en" class="text-center text-xs text-zinc-400 mt-2 mb-4">
-    {{ _('Click on words to see what they mean.') }}
-  </p>
-  {% endif %}
 </header>
 {% endmacro %}
 
@@ -184,7 +175,7 @@ On wide screens, the sidebar is on the right side of a split view.
       <template x-if="sidebarTab === null">
         <span class="text-slate-500 font-medium">{{ _('Sidebar') }}</span>
       </template>
-      <template x-if="sidebarTab !== null">
+      <template x-if="sidebarTab !== null && sidebarTab !== 'word-detail'">
         <div class="flex items-center gap-1 min-w-0">
           <button class="text-slate-400 hover:text-slate-700 shrink-0" @click="sidebarTab = null">{{ _('Sidebar') }}</button>
           <span class="text-slate-300 shrink-0">&rsaquo;</span>
@@ -196,6 +187,15 @@ On wide screens, the sidebar is on the right side of a split view.
                   lookup: '{{ _('Dictionary lookup') }}',
                   resources: '{{ _('Resources') }}',
                 })[sidebarTab]"></span>
+        </div>
+      </template>
+      <template x-if="sidebarTab === 'word-detail'">
+        <div class="flex items-center gap-1 min-w-0">
+          <button class="text-slate-400 hover:text-slate-700 shrink-0" @click="sidebarTab = null">{{ _('Sidebar') }}</button>
+          <span class="text-slate-300 shrink-0">&rsaquo;</span>
+          <button class="text-slate-400 hover:text-slate-700 shrink-0" @click="sidebarTab = 'analyze'">{{ _('Analyze') }}</button>
+          <span class="text-slate-300 shrink-0">&rsaquo;</span>
+          <span class="text-slate-500 truncate" lang="sa" x-text="wordAnalysis.form"></span>
         </div>
       </template>
     </div>
@@ -247,14 +247,112 @@ On wide screens, the sidebar is on the right side of a split view.
           </button>
         </li>
       </ul>
+
+      {% if translations %}
+      <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 px-4 mt-4 mb-1">{{ _('Translations') }}</h3>
+      <hr class="mx-4 mb-1 border-slate-200">
+      <ul>
+        {% for t in translations %}
+        <li>
+          <label class="flex items-center gap-3 w-full px-4 py-2.5 hover:bg-slate-200 transition-colors cursor-pointer">
+            <input type="checkbox"
+                   @change="toggleTranslation('{{ t.slug }}')"
+                   :checked="enabledTranslations['{{ t.slug }}']"
+                   class="shrink-0">
+            <span>{{ t.title }}{% if t.language != 'sa' %} ({{ t.language }}){% endif %}</span>
+          </label>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      {% if commentaries %}
+      <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 px-4 mt-4 mb-1">{{ _('Commentaries') }}</h3>
+      <hr class="mx-4 mb-1 border-slate-200">
+      <ul>
+        {% for c in commentaries %}
+        <li>
+          <label class="flex items-center gap-3 w-full px-4 py-2.5 hover:bg-slate-200 transition-colors cursor-pointer">
+            <input type="checkbox"
+                   @change="toggleTranslation('{{ c.slug }}')"
+                   :checked="enabledTranslations['{{ c.slug }}']"
+                   class="shrink-0">
+            <span>{{ c.title }}</span>
+          </label>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
     </div>
 
     <div x-show="sidebarTab === 'about'" x-cloak class="p-4">
       <h2 class="text-lg font-semibold text-slate-700 mb-1">{{ _('About this text') }}</h2>
       <hr class="mb-4 border-slate-200">
       {% if text_about %}
+
+      {# --- Source edition (sourceDesc) --- #}
+      <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">{{ _('Source Edition') }}</h3>
+      {% if text_about.has_source_info %}
+      <table class="text-sm w-full mb-4">
+        <tbody>
+          {% if text_about.source_author %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Author') }}</td>
+            <td class="py-1.5">{{ text_about.source_author }}</td>
+          </tr>
+          {% endif %}
+          {% if text_about.source_editor %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Editor') }}</td>
+            <td class="py-1.5">{{ text_about.source_editor }}</td>
+          </tr>
+          {% endif %}
+          {% if text_about.source_publisher %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Publisher') }}</td>
+            <td class="py-1.5">{{ text_about.source_publisher }}</td>
+          </tr>
+          {% endif %}
+          {% if text_about.source_publisher_place %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Location') }}</td>
+            <td class="py-1.5">{{ text_about.source_publisher_place }}</td>
+          </tr>
+          {% endif %}
+          {% if text_about.source_publication_year %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Year') }}</td>
+            <td class="py-1.5">{{ text_about.source_publication_year }}</td>
+          </tr>
+          {% endif %}
+          {% if text_about.source_citation %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Source') }}</td>
+            <td class="py-1.5">{{ text_about.source_citation }}</td>
+          </tr>
+          {% endif %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="text-sm text-slate-400 mb-4">{{ _('Unknown') }}</p>
+      {% endif %}
+
+      {# --- Electronic text (publicationStmt / titleStmt) --- #}
+      <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">{{ _('Electronic Text') }}</h3>
       <table class="text-sm w-full">
         <tbody>
+          {% if text_about.tei_title %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Title') }}</td>
+            <td class="py-1.5">{{ text_about.tei_title }}</td>
+          </tr>
+          {% endif %}
+          {% if text_about.tei_author %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Author') }}</td>
+            <td class="py-1.5">{{ text_about.tei_author }}</td>
+          </tr>
+          {% endif %}
           {% if text.project %}
           <tr>
             <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Project') }}</td>
@@ -263,52 +361,22 @@ On wide screens, the sidebar is on the right side of a split view.
             </td>
           </tr>
           {% endif %}
-          {% if text_about.title %}
-          <tr>
-            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Title') }}</td>
-            <td class="py-1.5">{{ text_about.title }}</td>
-          </tr>
-          {% endif %}
-          {% if text_about.author %}
-          <tr>
-            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Author') }}</td>
-            <td class="py-1.5">{{ text_about.author }}</td>
-          </tr>
-          {% endif %}
-          {% if text_about.publisher %}
+          {% if text_about.tei_publisher %}
           <tr>
             <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Publisher') }}</td>
-            <td class="py-1.5">{{ text_about.publisher }}</td>
+            <td class="py-1.5">{{ text_about.tei_publisher }}</td>
           </tr>
           {% endif %}
-          {% if text_about.editor %}
+          {% if text_about.tei_publication_year %}
           <tr>
-            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Editor') }}</td>
-            <td class="py-1.5">{{ text_about.editor }}</td>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Date') }}</td>
+            <td class="py-1.5">{{ text_about.tei_publication_year }}</td>
           </tr>
           {% endif %}
-          {% if text_about.publisher_place %}
-          <tr>
-            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Location') }}</td>
-            <td class="py-1.5">{{ text_about.publisher_place }}</td>
-          </tr>
-          {% endif %}
-          {% if text_about.publication_year %}
-          <tr>
-            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Year') }}</td>
-            <td class="py-1.5">{{ text_about.publication_year }}</td>
-          </tr>
-          {% endif %}
-          {% if text_about.source %}
-          <tr>
-            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Source') }}</td>
-            <td class="py-1.5">{{ text_about.source }}</td>
-          </tr>
-          {% endif %}
-          {% if text_about.availability %}
+          {% if text_about.tei_availability %}
           <tr>
             <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Availability') }}</td>
-            <td class="py-1.5">{{ text_about.availability | safe }}</td>
+            <td class="py-1.5">{{ text_about.tei_availability | safe }}</td>
           </tr>
           {% endif %}
         </tbody>
@@ -316,13 +384,14 @@ On wide screens, the sidebar is on the right side of a split view.
       {% if text_about.credits %}
       <div class="mt-4">
         <h3 class="text-sm font-medium text-slate-600 mb-1">{{ _('Credits') }}</h3>
-        <ul class="text-sm space-y-1">
+        <dl class="text-sm">
           {% for role, names in text_about.credits %}
-          <li>
-            {% if role %}<span class="text-slate-500">{{ role }}</span> {% endif %}{{ names | join(', ') }}
-          </li>
+          <div class="flex justify-between gap-4 py-1 border-b border-slate-100">
+            <dt>{{ names | join(', ') }}</dt>
+            <dd class="text-slate-500 text-right shrink-0">{{ role }}</dd>
+          </div>
           {% endfor %}
-        </ul>
+        </dl>
       </div>
       {% endif %}
       {% if text_about.notes %}
@@ -334,7 +403,20 @@ On wide screens, the sidebar is on the right side of a split view.
       {% if text_about.revision_desc %}
       <div class="mt-4">
         <h3 class="text-sm font-medium text-slate-600 mb-1">{{ _('Revision History') }}</h3>
-        <div class="text-sm text-slate-600">{{ text_about.revision_desc | safe }}</div>
+        <ul class="text-sm space-y-2">
+          {% for entry in text_about.revision_desc %}
+          <li class="border-b border-slate-100 pb-2">
+            <div class="text-slate-600">{{ entry.description }}</div>
+            {% if entry.date or entry.who %}
+            <div class="text-xs text-slate-400 mt-0.5">
+              {%- if entry.date %}{{ entry.date }}{% endif -%}
+              {%- if entry.date and entry.who %} &middot; {% endif -%}
+              {%- if entry.who %}{{ entry.who }}{% endif -%}
+            </div>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
       </div>
       {% endif %}
       {% endif %}
@@ -427,6 +509,64 @@ On wide screens, the sidebar is on the right side of a split view.
       <template x-if="!analyzeData.error && analyzeData.words.length === 0">
         <p class="text-slate-400 text-sm">{{ _('Click a verse to see its word-by-word analysis.') }}</p>
       </template>
+    </div>
+
+    <div x-show="sidebarTab === 'word-detail'" x-cloak class="p-4">
+      <div class="text-sm" x-show="wordAnalysis.form">
+        <header>
+          <h1 class="text-xl" lang="sa" x-text="wordAnalysis.form"></h1>
+          <p class="mb-4">
+            <span lang="sa" x-text="wordAnalysis.lemma"></span>
+            <span x-text="wordAnalysis.parse"></span>
+          </p>
+        </header>
+      </div>
+
+      <div class="flex gap-2 mb-4 border-b border-slate-200">
+        <button class="px-3 py-1.5 text-sm font-medium -mb-px border-b-2 transition-colors"
+                :class="wordDetailTab === 'meaning' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'"
+                @click="wordDetailTab = 'meaning'">{{ _('Meaning') }}</button>
+        <button class="px-3 py-1.5 text-sm font-medium -mb-px border-b-2 transition-colors"
+                :class="wordDetailTab === 'grammar' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'"
+                @click="wordDetailTab = 'grammar'">{{ _('Grammar') }}</button>
+      </div>
+
+      <div x-show="wordDetailTab === 'meaning'">
+        <form class="mb-4" @submit.prevent="searchDictionary">
+          <div class="mb-2 hidden lg:flex">
+            <input name="q" type="text" placeholder="राम, ರಾಮ, ma, rAma, ..."
+                class="p-2 flex-1 bg-slate-100 rounded-tl rounded-bl"
+                x-model="dictQuery">
+            <input type="submit" value="{{ _('Search') }}"
+                class="cursor-pointer btn-submit p-2 rounded-tr rounded-br">
+          </div>
+
+          <div x-cloak @click.outside="onClickOutsideOfSourceSelector"
+              class="relative text-sm select-none inline-block">
+            <div class="f-select bg-white lg:bg-slate-100 px-2 cursor-pointer inline-block"
+                 @click.prevent="toggleSourceSelector">
+                {{ _('(choose dictionary)') }} <span class="text-xs">&#x25BC;</span>
+            </div>
+            <div x-show="showDictSourceSelector" class="dropdown-pane p-2 w-64 !static lg:!absolute">
+              {{ m_dict.source_multiselect(x_model='dictSources') }}
+            </div>
+          </div>
+        </form>
+        <div x-html="dictionaryResponse"></div>
+      </div>
+
+      <div x-show="wordDetailTab === 'grammar'">
+        <div x-show="grammarDetailResponse">
+          <button class="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 mb-3"
+                  @click="grammarDetailResponse = null">
+            <span>&lsaquo;</span> {{ _('Back') }}
+          </button>
+          <div x-html="grammarDetailResponse"></div>
+        </div>
+        <div x-show="!grammarDetailResponse" @click="onClickGrammar($event)">
+          <div x-html="grammarResponse"></div>
+        </div>
+      </div>
     </div>
 
     <div x-show="sidebarTab === 'lookup'" x-cloak class="p-4">
@@ -664,6 +804,11 @@ On wide screens, the sidebar is on the right side of a split view.
           </div>
         </div>
       </s-block>
+
+      <template x-for="tr in translationsFor(b.slug)" :key="tr.slug">
+        <div class="translation-block pl-4 border-l-2 border-slate-200 mt-2 text text-slate-600"
+             x-html="tr.html"></div>
+      </template>
     </div>
   </template>
 

@@ -843,10 +843,13 @@ export class XMLView {
 
   onChange?: () => void;
 
+  textZoom: number;
+
   // eslint-disable-next-line default-param-last
-  constructor(element: HTMLElement, initialContent: string = '', onChange?: () => void) {
+  constructor(element: HTMLElement, initialContent: string = '', onChange?: () => void, textZoom: number = 1) {
     this.schema = xmlSchema;
     this.onChange = onChange;
+    this.textZoom = textZoom;
 
     const textNode = initialContent ? this.schema.text(initialContent) : undefined;
     const codeblock = this.schema.node('codeblock', null, textNode ? [textNode] : []);
@@ -879,6 +882,18 @@ export class XMLView {
       attributes: {
         class: 'w-full h-full font-mono text-sm focus:outline-none',
         spellcheck: 'false',
+        style: `font-size: ${textZoom}rem; line-height: ${1.2 + (textZoom - 1) * 0.6}`,
+      },
+    });
+  }
+
+  setTextZoom(zoom: number) {
+    this.textZoom = zoom;
+    this.view.setProps({
+      attributes: {
+        class: 'w-full h-full font-mono text-sm focus:outline-none',
+        spellcheck: 'false',
+        style: `font-size: ${zoom}rem; line-height: ${1.2 + (zoom - 1) * 0.6}`,
       },
     });
   }

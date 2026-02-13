@@ -1,0 +1,47 @@
+{% macro show_dhatu_entry(de) -%}
+  {% set spec = "{}-{}".format(de.dhatu.aupadeshika, de.dhatu.gana) %}
+  <a href="#" class="text-sky-600 hover:underline" data-grammar-dhatu="{{ spec }}">
+  {{- de.dhatu.aupadeshika|md }} ({{ (de.dhatu.gana|v_gloss).sa_short|md }})
+  </a>
+{%- endmacro %}
+
+{% macro arr() -%}
+<span class="text-slate-400">&rarr;</span>
+{%- endmacro %}
+
+{% if entries %}
+<ul>
+  {% for e in entries %}
+  <li class="my-3 text-sm">
+    {% if e is subanta %}
+      {% set pe = e.pratipadika_entry %}
+      {% if pe is basic_pratipadika %}
+        <span class="font-medium">{{ pe.pratipadika.text|md }}</span>
+      {% elif pe is krdanta %}
+        {{ show_dhatu_entry(pe.dhatu_entry) }}
+        {{ arr() }}
+        {{ pe.dhatu_entry.clean_text|md }}
+        + <a href="#" class="text-sky-600 hover:underline" data-grammar-krt="{{ pe.krt.value }}">{{ pe.krt|string|md }}</a>
+      {% endif %}
+
+      <p class="text-slate-500">
+        {{ (e.linga|v_gloss).en_long }},
+        {{ (e.vibhakti|v_gloss).en_long }}
+        {{ (e.vacana|v_gloss).en_long }}
+      </p>
+    {% elif e is tinanta %}
+      {{ show_dhatu_entry(e.dhatu_entry) }}
+
+      <p class="text-slate-500">
+        {{ (e.prayoga|v_gloss).en_long }},
+        {{ (e.lakara|v_gloss).en_long }}
+        {{ (e.purusha|v_gloss).en_long }}
+        {{ (e.vacana|v_gloss).en_long }}
+      </p>
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="text-slate-400 text-sm">No grammar data available.</p>
+{% endif %}

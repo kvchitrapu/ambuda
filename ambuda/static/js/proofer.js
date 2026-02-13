@@ -290,7 +290,7 @@ export default () => ({
       this.editor = new XMLView(editorElement, initialContent, () => {
         this.hasUnsavedChanges = true;
         $('#content').value = Alpine.raw(this.editor).getText();
-      });
+      }, this.textZoom);
     } else {
       this.editor = new ProofingEditor(editorElement, initialContent, () => {
         this.hasUnsavedChanges = true;
@@ -835,7 +835,7 @@ export default () => ({
       this.editor = new XMLView(editorElement, content, () => {
         this.hasUnsavedChanges = true;
         $('#content').value = Alpine.raw(this.editor).getText();
-      });
+      }, this.textZoom);
     }
 
     // Reset state + focus

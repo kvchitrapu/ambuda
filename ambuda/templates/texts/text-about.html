@@ -24,11 +24,11 @@
           <a class="text-blue-500 hover:underline" href="{{ url_for('proofing.project.summary', slug=text.project.slug) }}">{{ text.project.display_title }}</a>
         </td>
       </tr>
-      {{ row('Title', header.title) }}
-      {{ row('Author', header.author) }}
-      {{ row('Publisher', header.publisher) }}
-      {{ row('Location', header.publisher_place) }}
-      {{ row('Availability', header.availability|safe) }}
+      {{ row('Title', header.tei_title) }}
+      {{ row('Author', header.tei_author) }}
+      {% if header.source_publisher %}{{ row('Publisher', header.source_publisher) }}{% endif %}
+      {% if header.source_publisher_place %}{{ row('Location', header.source_publisher_place) }}{% endif %}
+      {% if header.tei_availability %}{{ row('Availability', header.tei_availability|safe) }}{% endif %}
       {% if text.project %}
       {% endif %}
     </tbody>

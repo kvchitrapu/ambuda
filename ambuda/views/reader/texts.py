@@ -319,6 +319,19 @@ def section(text_slug, section_slug):
     header_data = xml.parse_tei_header(text_.header)
     exports = sorted(text_.exports, key=_export_key)
 
+    # Collect translations and commentaries from child texts.
+    # A child whose language differs from the source is a translation;
+    # one that shares the same language is a commentary.
+    if text_.parent_id:
+        siblings = [c for c in text_.parent.children if c.id != text_.id]
+        source_lang = text_.parent.language
+    else:
+        siblings = list(text_.children)
+        source_lang = text_.language
+
+    translations = [c for c in siblings if c.language != source_lang]
+    commentaries = [c for c in siblings if c.language == source_lang]
+
     return render_template(
         "texts/section.html",
         text=text_,
@@ -334,4 +347,6 @@ def section(text_slug, section_slug):
         text_about=header_data,
         raw_header=text_.header,
         exports=exports,
+        translations=translations,
+        commentaries=commentaries,
     )

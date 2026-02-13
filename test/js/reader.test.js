@@ -1,5 +1,5 @@
 import { $ } from '@/core.ts';
-import Reader from '@/reader';
+import Reader, { toAksharas } from '@/reader';
 
 const sampleHTML = `
 <body>
@@ -249,4 +249,63 @@ test('onClickOutsideOfSourceSelector is a no-op otherwise', async () => {
 
   await r.onClickOutsideOfSourceSelector();
   expect(r.showDictSourceSelector).toBe(false);
+});
+
+// toAksharas
+// ==========
+
+test('toAksharas splits simple consonant+vowel aksharas', () => {
+  expect(toAksharas('कका')).toEqual(['क', 'का']);
+});
+
+test('toAksharas keeps anusvara with its akshara', () => {
+  expect(toAksharas('सं')).toEqual(['सं']);
+});
+
+test('toAksharas keeps visarga with its akshara', () => {
+  expect(toAksharas('कः')).toEqual(['कः']);
+});
+
+test('toAksharas keeps conjuncts (virama+consonant) together', () => {
+  expect(toAksharas('ज्ञा')).toEqual(['ज्ञा']);
+});
+
+test('toAksharas keeps triple conjuncts together', () => {
+  expect(toAksharas('स्त्र')).toEqual(['स्त्र']);
+});
+
+test('toAksharas keeps trailing virama (halant) attached', () => {
+  expect(toAksharas('क्')).toEqual(['क्']);
+});
+
+test('toAksharas splits independent vowels into separate aksharas', () => {
+  expect(toAksharas('अइ')).toEqual(['अ', 'इ']);
+});
+
+test('toAksharas treats spaces as separate units', () => {
+  expect(toAksharas('क ख')).toEqual(['क', ' ', 'ख']);
+});
+
+test('toAksharas treats punctuation as separate units', () => {
+  expect(toAksharas('क।')).toEqual(['क', '।']);
+});
+
+test('toAksharas treats digits as separate units', () => {
+  expect(toAksharas('०१')).toEqual(['०', '१']);
+});
+
+test('toAksharas handles non-Devanagari text as individual characters', () => {
+  expect(toAksharas('abc')).toEqual(['a', 'b', 'c']);
+});
+
+test('toAksharas handles a realistic word: dharmakSetre', () => {
+  expect(toAksharas('धर्मक्षेत्रे')).toEqual(['ध', 'र्म', 'क्षे', 'त्रे']);
+});
+
+test('toAksharas handles vowel sign + anusvara together', () => {
+  expect(toAksharas('कां')).toEqual(['कां']);
+});
+
+test('toAksharas returns empty array for empty string', () => {
+  expect(toAksharas('')).toEqual([]);
 });

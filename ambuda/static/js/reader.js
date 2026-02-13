@@ -34,39 +34,16 @@ export function getBlockSlug(blockID) {
 /**
  * Split Devanagari text into aksharas (syllabic units).
  *
- * An akshara consists of a base character (consonant or vowel) followed by
- * any combining marks (nukta, vowel signs, virama, anusvara, visarga, etc.).
- *
- * @param {string} text - Input text (may contain both Devanagari and non-Devanagari)
- * @returns {string[]} Array of strings, each representing either an akshara or a single character
+ * An akshara starts with a base character (vowel or consonant), absorbs any
+ * virama+consonant conjuncts and combining marks, and may end with a bare
+ * virama (halant). Non-Devanagari characters become individual tokens.
  */
-function toAksharas(text) {
-  const aksharas = [];
-  // Match Devanagari aksharas: base character + combining marks
-  // Base characters: U+0900-U+0963 (vowels, consonants, etc.), U+0970-U+097F
-  // Combining marks: U+093C-U+094F (nukta, vowel signs, virama), U+0951-U+0954, U+0962-U+0963
-  const aksharaRegex = /[\u0900-\u0963\u0970-\u097F][\u093C-\u094F\u0951-\u0954\u0962-\u0963]*/g;
-  let lastIndex = 0;
-  let match = aksharaRegex.exec(text);
-
-  while (match !== null) {
-    // Add any non-Devanagari characters before this akshara
-    for (let i = lastIndex; i < match.index; i += 1) {
-      aksharas.push(text[i]);
-    }
-
-    // Add the akshara
-    aksharas.push(match[0]);
-    lastIndex = match.index + match[0].length;
-    match = aksharaRegex.exec(text);
-  }
-
-  // Add any remaining characters
-  for (let i = lastIndex; i < text.length; i += 1) {
-    aksharas.push(text[i]);
-  }
-
-  return aksharas;
+export function toAksharas(text) {
+  // akshara:    base (virama+consonant | combining)* virama?
+  // base:       [\u0904-\u0939\u093D\u0950\u0958-\u0961\u0970-\u097F]
+  // consonant:  [\u0915-\u0939\u0958-\u095F]
+  // combining:  [\u0900-\u0903\u093C\u093E-\u094C\u094E-\u094F\u0951-\u0957\u0962-\u0963]
+  return text.match(/[\u0904-\u0939\u093D\u0950\u0958-\u0961\u0970-\u097F](?:\u094D[\u0915-\u0939\u0958-\u095F]|[\u0900-\u0903\u093C\u093E-\u094C\u094E-\u094F\u0951-\u0957\u0962-\u0963])*\u094D?|[\s\S]/g) || [];
 }
 
 const READER_CONFIG_KEY = 'reader';
@@ -100,9 +77,15 @@ export default () => ({
 
   // The current dictionary response.
   dictionaryResponse: null,
+  // The current grammar (kosha) response.
+  grammarResponse: null,
+  // Grammar detail (dhatu/krt) fragment loaded inline.
+  grammarDetailResponse: null,
   // Analysis of a word clicked by the user.
   wordAnalysis: { form: null, lemma: null, parse: null },
   analyzeData: { blockSlug: null, words: [], error: null },
+  // Active sub-tab within the word-detail view ('meaning' or 'grammar').
+  wordDetailTab: 'meaning',
 
   // Transient data
   // --------------
@@ -117,6 +100,9 @@ export default () => ({
   // If true, show the dictionary selection widget.
   showDictSourceSelector: false,
   sectionSlug: null,
+  // Enabled inline translations, keyed by translation slug.
+  // Value is the fetched data { [blockSlug]: html } or `true` while loading.
+  enabledTranslations: {},
 
   init() {
     this.loadSettings();
@@ -124,7 +110,7 @@ export default () => ({
     this.data = JSON.parse(document.getElementById('payload').textContent);
     this.sectionSlug = this.data.section_slug;
 
-    history.replaceState({ sectionSlug: this.sectionSlug }, '', window.location.href);
+    window.history.replaceState({ sectionSlug: this.sectionSlug }, '', window.location.href);
     window.addEventListener('popstate', (e) => this.onPopState(e));
     this.$nextTick(() => this.insertSoftHyphensInDOM());
   },
@@ -165,34 +151,27 @@ export default () => ({
     this.wordAnalysis = { form: null, lemma: null, parse: null };
     this.analyzeData = { blockSlug: null, words: [], error: null };
 
-    const resp = await fetch(`/api${location.pathname}`);
+    const resp = await fetch(`/api${window.location.pathname}`);
     if (!resp.ok) return;
     this.data = await resp.json();
     this.$nextTick(() => this.insertSoftHyphensInDOM());
+    this.refreshTranslations();
   },
 
   insertSoftHyphensInDOM() {
-    function insertSoftHyphens(node) {
+    function walk(node) {
       if (node.nodeType === Node.TEXT_NODE) {
-        const text = node.textContent;
-        const aksharas = toAksharas(text);
-        const htmlString = aksharas.join('&shy;');
-
-        const temp = document.createElement('span');
-        temp.innerHTML = htmlString;
-
-        const fragment = document.createDocumentFragment();
-        while (temp.firstChild) {
-          fragment.appendChild(temp.firstChild);
-        }
-        node.parentNode.replaceChild(fragment, node);
+        node.nodeValue = toAksharas(node.nodeValue).join('\u00AD');
       } else if (node.nodeType === Node.ELEMENT_NODE) {
-        Array.from(node.childNodes).forEach((child) => insertSoftHyphens(child));
+        node.childNodes.forEach((child) => walk(child));
       }
     }
+    document.querySelectorAll('s-p').forEach(walk);
+  },
 
-    document.querySelectorAll('s-p').forEach((el) => {
-      insertSoftHyphens(el);
+  refreshTranslations() {
+    Object.keys(this.enabledTranslations).forEach((slug) => {
+      this.fetchTranslation(slug);
     });
   },
 
@@ -206,7 +185,7 @@ export default () => ({
       this.sectionSlug = newData.section_slug;
 
       if (pushState) {
-        history.pushState({ sectionSlug: this.sectionSlug }, '', url);
+        window.history.pushState({ sectionSlug: this.sectionSlug }, '', url);
       }
 
       const title = newData.section_title
@@ -218,6 +197,7 @@ export default () => ({
       if (textPanel) textPanel.scrollTop = 0;
 
       this.$nextTick(() => this.insertSoftHyphensInDOM());
+      this.refreshTranslations();
     } catch {
       window.location.href = url;
     }
@@ -240,9 +220,9 @@ export default () => ({
   },
 
   onPopState(event) {
-    const slug = event.state && event.state.sectionSlug;
+    const slug = event.state?.sectionSlug;
     if (slug && slug !== this.sectionSlug) {
-      this.navigateToSection(location.pathname, false);
+      this.navigateToSection(window.location.pathname, false);
     }
   },
 
@@ -261,20 +241,56 @@ export default () => ({
     }
   },
 
-  async fetchBlockParse(blockSlug) {
-    const textSlug = Routes.getTextSlug();
-    const url = Routes.parseData(textSlug, blockSlug);
+  async fetchGrammar(form, lemma, parse) {
+    const url = Routes.ajaxBharatiGrammar(form, lemma, parse);
+    const resp = await fetch(url);
+    if (resp.ok) {
+      this.grammarResponse = await resp.text();
+    } else {
+      this.grammarResponse = '<p>No grammar data available.</p>';
+    }
+  },
 
+  async onClickGrammar(e) {
+    const dhatuEl = e.target.closest('[data-grammar-dhatu]');
+    if (dhatuEl) {
+      e.preventDefault();
+      const spec = dhatuEl.dataset.grammarDhatu;
+      const url = `/api/bharati/dhatu/${encodeURIComponent(spec)}`;
+      const resp = await fetch(url);
+      this.grammarDetailResponse = resp.ok
+        ? await resp.text()
+        : '<p>Could not load root data.</p>';
+      return;
+    }
+
+    const krtEl = e.target.closest('[data-grammar-krt]');
+    if (krtEl) {
+      e.preventDefault();
+      const value = krtEl.dataset.grammarKrt;
+      const url = `/api/bharati/krt/${encodeURIComponent(value)}`;
+      const resp = await fetch(url);
+      this.grammarDetailResponse = resp.ok
+        ? await resp.text()
+        : '<p>Could not load suffix data.</p>';
+    }
+  },
+
+  async fetchBlockParse(blockSlug) {
+    const url = Routes.parseData(Routes.getTextSlug(), blockSlug);
     let resp;
     try {
       resp = await fetch(url);
-    } catch (e) {
+    } catch {
       return [null, false];
     }
 
     if (resp.ok) {
       const html = await resp.text();
       return [html, true];
+    }
+    if (resp.status === 404) {
+      return ['<p>Sorry, we don\'t have an analysis for this text.</p>', false];
     }
     return ['<p>Sorry, this content is not available right now. (Server error)</p>', false];
   },
@@ -290,7 +306,7 @@ export default () => ({
       return;
     }
 
-    if (e.target.closest('button') || e.target.closest('a')) {
+    if (e.target.closest('button, a')) {
       return;
     }
 
@@ -303,8 +319,8 @@ export default () => ({
   async onClickBlock(blockSlug) {
     const block = this.data.blocks.find((b) => b.slug === blockSlug);
 
-    if (block._analyzeWords) {
-      this.analyzeData = { blockSlug, words: block._analyzeWords, error: null };
+    if (block.analyzeWords) {
+      this.analyzeData = { blockSlug, words: block.analyzeWords, error: null };
       this.sidebarTab = 'analyze';
       this.showSidebar = true;
       return;
@@ -312,17 +328,13 @@ export default () => ({
 
     const [html, ok] = await this.fetchBlockParse(blockSlug);
     if (ok) {
-      const parser = new DOMParser();
-      const doc = parser.parseFromString(html, 'text/html');
-      const words = [];
-      doc.querySelectorAll('s-w').forEach((el) => {
-        words.push({
-          form: el.textContent,
-          lemma: el.getAttribute('lemma'),
-          parse: el.getAttribute('parse'),
-        });
-      });
-      block._analyzeWords = words;
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const words = Array.from(doc.querySelectorAll('s-w'), (el) => ({
+        form: el.textContent,
+        lemma: el.getAttribute('lemma'),
+        parse: el.getAttribute('parse'),
+      }));
+      block.analyzeWords = words;
       this.analyzeData = { blockSlug, words, error: null };
     } else {
       this.analyzeData = { blockSlug: null, words: [], error: html };
@@ -334,8 +346,11 @@ export default () => ({
   lookupAnalyzeWord(word) {
     this.dictQuery = word.lemma;
     this.wordAnalysis = { form: word.form, lemma: word.lemma, parse: word.parse };
+    this.wordDetailTab = 'meaning';
+    this.grammarDetailResponse = null;
+    this.sidebarTab = 'word-detail';
     this.searchDictionary();
-    this.sidebarTab = 'lookup';
+    this.fetchGrammar(word.form, word.lemma, word.parse);
   },
 
   async onClickWord($word) {
@@ -400,6 +415,38 @@ export default () => ({
     document.addEventListener('mouseup', onMouseUp);
   },
 
+  // Translation handlers
+  // ====================
+
+  async toggleTranslation(slug) {
+    if (this.enabledTranslations[slug]) {
+      delete this.enabledTranslations[slug];
+    } else {
+      this.enabledTranslations[slug] = true;
+      await this.fetchTranslation(slug);
+    }
+  },
+
+  async fetchTranslation(slug) {
+    const url = `/api/translations/${slug}/${this.sectionSlug}`;
+    try {
+      const resp = await fetch(url);
+      if (resp.ok) {
+        this.enabledTranslations[slug] = await resp.json();
+      } else {
+        delete this.enabledTranslations[slug];
+      }
+    } catch {
+      delete this.enabledTranslations[slug];
+    }
+  },
+
+  translationsFor(blockSlug) {
+    return Object.entries(this.enabledTranslations)
+      .filter(([, data]) => data && typeof data === 'object' && data[blockSlug])
+      .map(([slug, data]) => ({ slug, html: data[blockSlug] }));
+  },
+
   // Bookmark handlers
   // =================
 
@@ -415,20 +462,16 @@ export default () => ({
         body: JSON.stringify({ block_slug: blockSlug }),
       });
 
-      if (resp.ok) {
-        const data = await resp.json();
-        console.log(data.bookmarked ? 'Bookmarked' : 'Bookmark removed');
-      } else {
+      if (!resp.ok) {
         const error = await resp.json();
         if (resp.status === 401) {
-          alert('Please log in to bookmark verses');
+          alert('Please log in to bookmark verses'); // eslint-disable-line no-alert
         } else {
-          alert(`Failed to toggle bookmark: ${error.error || 'Unknown error'}`);
+          alert(`Failed to toggle bookmark: ${error.error || 'Unknown error'}`); // eslint-disable-line no-alert
         }
       }
-    } catch (error) {
-      console.error('Error toggling bookmark:', error);
-      alert('Failed to toggle bookmark');
+    } catch {
+      alert('Failed to toggle bookmark'); // eslint-disable-line no-alert
     }
   },
 });

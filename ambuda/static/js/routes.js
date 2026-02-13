@@ -9,6 +9,8 @@ export default {
 
   ajaxBharatiQuery: (query) => `/api/bharati/query/${query}`,
 
+  ajaxBharatiGrammar: (form, lemma, parse) => `/api/bharati/grammar?form=${encodeURIComponent(form)}&lemma=${encodeURIComponent(lemma)}&parse=${encodeURIComponent(parse)}`,
+
   dictionaryQuery: (sources, query) => {
     const sourcesStr = sources.join(',');
     return `/tools/dictionaries/${sourcesStr}/${query}`;

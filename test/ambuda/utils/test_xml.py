@@ -100,12 +100,17 @@ def test_parse_tei_header():
     </teiHeader>
     """
     parsed = x.parse_tei_header(header)
-    assert parsed.title == "TITLE"
-    assert parsed.author == "BIBL_AUTHOR"
-    assert parsed.editor == "BIBL_EDITOR"
-    assert parsed.publisher == "BIBL_PUBLISHER"
-    assert parsed.publisher_place == "BIBL_PUB_PLACE"
-    assert parsed.publication_year == "BIBL_PUB_YEAR"
+    # Electronic text fields (from titleStmt / publicationStmt)
+    assert parsed.tei_title == "TITLE"
+    assert parsed.tei_author == "AUTHOR"
+    assert parsed.tei_publisher == "Ambuda"
+    assert parsed.tei_publication_year == "{current_year}"
+    # Source edition fields (from sourceDesc/bibl)
+    assert parsed.source_author == "BIBL_AUTHOR"
+    assert parsed.source_editor == "BIBL_EDITOR"
+    assert parsed.source_publisher == "BIBL_PUBLISHER"
+    assert parsed.source_publisher_place == "BIBL_PUB_PLACE"
+    assert parsed.source_publication_year == "BIBL_PUB_YEAR"
 
 
 def test_parse_tei_header__author_fallback_to_titlestmt():
@@ -125,7 +130,7 @@ def test_parse_tei_header__author_fallback_to_titlestmt():
     </teiHeader>
     """
     parsed = x.parse_tei_header(header)
-    assert parsed.author == "TITLESTMT_AUTHOR"
+    assert parsed.tei_author == "TITLESTMT_AUTHOR"
 
 
 def test_parse_tei_header__source_unstructured_bibl():
@@ -142,7 +147,7 @@ def test_parse_tei_header__source_unstructured_bibl():
     </teiHeader>
     """
     parsed = x.parse_tei_header(header)
-    assert parsed.source == "Smith, J. (1990). A Great Book. Publisher."
+    assert parsed.source_citation == "Smith, J. (1990). A Great Book. Publisher."
 
 
 def test_parse_tei_header__credits():
@@ -242,12 +247,20 @@ def test_parse_tei_header__revision_desc():
     </teiHeader>
     """
     parsed = x.parse_tei_header(header)
-    assert "Initial encoding" in parsed.revision_desc
-    assert "Added metadata" in parsed.revision_desc
-    assert "<p>" in parsed.revision_desc
+    assert len(parsed.revision_desc) == 2
+    assert parsed.revision_desc[0] == {
+        "date": "2020-01-01",
+        "who": "",
+        "description": "Initial encoding",
+    }
+    assert parsed.revision_desc[1] == {
+        "date": "2021-06-15",
+        "who": "",
+        "description": "Added metadata",
+    }
 
 
-def test_parse_tei_header__publication_year_fallback():
+def test_parse_tei_header__publication_year_separation():
     header = """
     <teiHeader xml:lang="en">
       <fileDesc>
@@ -266,7 +279,9 @@ def test_parse_tei_header__publication_year_fallback():
     </teiHeader>
     """
     parsed = x.parse_tei_header(header)
-    assert parsed.publication_year == "2020"
+    # publicationStmt date goes to tei_publication_year, not publication_year
+    assert parsed.tei_publication_year == "2020"
+    assert parsed.source_publication_year == ""
 
 
 def test_parse_tei_header__elements_missing():
@@ -279,15 +294,19 @@ def test_parse_tei_header__elements_missing():
     </teiHeader>
     """
     parsed = x.parse_tei_header(header)
-    assert parsed.title == "Unknown"
-    assert parsed.author == "Unknown"
-    assert parsed.publisher == "Unknown"
-    assert parsed.editor == ""
-    assert parsed.publication_year == ""
-    assert parsed.source == ""
+    assert parsed.tei_title == "Unknown"
+    assert parsed.tei_author == "Unknown"
+    assert parsed.source_author == ""
+    assert parsed.source_editor == ""
+    assert parsed.source_publisher == ""
+    assert parsed.source_publication_year == ""
+    assert parsed.source_citation == ""
+    assert parsed.tei_publisher == ""
+    assert parsed.tei_publication_year == ""
+    assert parsed.tei_availability == ""
     assert parsed.credits is None
     assert parsed.notes == ""
-    assert parsed.revision_desc == ""
+    assert parsed.revision_desc is None
 
 
 def test_parse_tei_header__undefined():
