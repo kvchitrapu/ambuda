@@ -30,6 +30,8 @@ class InlineType(StrEnum):
     FLAG = "flag"
     CHAYA = "chaya"
     PRAKRIT = "prakrit"
+    BOLD = "bold"
+    ITALIC = "italic"
     NOTE = "note"
     ADD = "add"
     ELLIPSIS = "ellipsis"

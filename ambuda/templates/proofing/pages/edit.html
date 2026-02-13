@@ -90,6 +90,9 @@
   .split-handle:hover::after { opacity: 1; }
   .split-handle-h::after { width: 5px; height: 32px; }
   .split-handle-v::after { height: 5px; width: 32px; }
+  .mark-btn::before { content: none !important; }
+  .mark-tooltip { display: none; }
+  .mark-btn:hover .mark-tooltip { display: block; }
 </style>
 {# Loading overlay shown while Alpine.js initializes #}
 <div id="editor-loading" class="h-screen flex items-center justify-center bg-slate-50">
@@ -338,14 +341,23 @@
     </div>
   </div>
 
-  <div x-show="showMarkToolbar" class="bg-slate-200 border-b px-2 py-1 flex flex-wrap gap-1 text-sm">
-    <template x-for="mark in inlineMarks" :key="mark.name">
-      <button type="button"
-              class="rounded px-2 py-0.5"
-              :class="mark.className"
-              @mousedown.prevent="toggleMark(mark.name)"
-              x-text="mark.label">
-      </button>
+  <div x-show="showMarkToolbar" class="bg-slate-200 border-b px-2 py-1 flex flex-wrap gap-0.5 text-sm items-center">
+    <template x-for="(group, gi) in markGroups" :key="group.key">
+      <div class="flex items-center gap-0.5">
+        <div x-show="gi > 0" class="w-px h-5 bg-slate-400 mx-1"></div>
+        <span class="text-[10px] text-slate-500 mr-0.5" x-text="group.label"></span>
+        <template x-for="mark in marksForGroup(group.key)" :key="mark.name">
+          <button type="button"
+                  class="mark-btn relative rounded w-8 py-0.5 text-center"
+                  style="border: 1px solid rgba(0,0,0,0.1)"
+                  :class="mark.className"
+                  @mousedown.prevent="toggleMark(mark.name)">
+            <span x-text="mark.emoji"></span>
+            <span class="mark-tooltip absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-0.5 bg-slate-900 text-white text-xs rounded whitespace-nowrap pointer-events-none z-20"
+                  x-text="mark.label"></span>
+          </button>
+        </template>
+      </div>
     </template>
   </div>
 

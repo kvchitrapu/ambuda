@@ -3,6 +3,7 @@ export interface InlineMarkConfig {
   emoji: string;
   label: string;
   className: string;
+  group: string;
   excludes?: string;
 }
 
@@ -13,6 +14,7 @@ export const INLINE_MARKS: InlineMarkConfig[] = [
     emoji: '⛔',
     label: 'Error',
     className: 'pm-error',
+    group: 'general',
     excludes: 'fix',
   },
   {
@@ -20,6 +22,7 @@ export const INLINE_MARKS: InlineMarkConfig[] = [
     emoji: '✅',
     label: 'Fix',
     className: 'pm-fix',
+    group: 'general',
     excludes: 'error',
   },
   {
@@ -27,12 +30,14 @@ export const INLINE_MARKS: InlineMarkConfig[] = [
     emoji: '?',
     label: 'Unclear',
     className: 'pm-flag',
+    group: 'general',
   },
   {
     name: 'ref',
-    emoji: 'ref: ',
+    emoji: '🦶',
     label: 'Footnote number',
     className: 'pm-ref',
+    group: 'general',
     excludes: '_',
   },
   {
@@ -40,6 +45,7 @@ export const INLINE_MARKS: InlineMarkConfig[] = [
     emoji: '🎬',
     label: 'Stage direction',
     className: 'pm-stage',
+    group: 'plays',
     excludes: 'speaker',
   },
   {
@@ -47,6 +53,7 @@ export const INLINE_MARKS: InlineMarkConfig[] = [
     emoji: '📣',
     label: 'Speaker',
     className: 'pm-speaker',
+    group: 'plays',
     excludes: 'stage',
   },
   {
@@ -54,6 +61,7 @@ export const INLINE_MARKS: InlineMarkConfig[] = [
     emoji: '🌒',
     label: 'Chaya',
     className: 'pm-chaya',
+    group: 'plays',
     excludes: 'speaker',
   },
   {
@@ -61,33 +69,58 @@ export const INLINE_MARKS: InlineMarkConfig[] = [
     emoji: '☀️',
     label: 'Prakrit',
     className: 'pm-prakrit',
+    group: 'plays',
     excludes: 'speaker',
+  },
+  {
+    name: 'bold',
+    emoji: 'B',
+    label: 'Term (bold)',
+    className: 'pm-bold',
+    group: 'advanced',
+  },
+  {
+    name: 'italic',
+    emoji: 'I',
+    label: 'Term (italic)',
+    className: 'pm-italic',
+    group: 'advanced',
   },
   {
     name: 'note',
     emoji: '📝',
     label: 'Internal note',
     className: 'pm-note',
+    group: 'advanced',
     excludes: '_',
   },
   {
     name: 'add',
-    emoji: '',
+    emoji: '+',
     label: 'Added by editor',
     className: 'pm-add',
+    group: 'advanced',
   },
   {
     name: 'ellipsis',
-    emoji: '',
+    emoji: '\u2026',
     label: 'Omitted by editor',
     className: 'pm-ellipsis',
+    group: 'advanced',
   },
   {
     name: 'quote',
     emoji: '💬',
     label: 'Quote',
     className: 'pm-quote',
+    group: 'advanced',
   },
+];
+
+export const MARK_GROUPS = [
+  { key: 'general', label: 'general' },
+  { key: 'plays', label: 'plays' },
+  { key: 'advanced', label: 'advanced' },
 ];
 
 export type MarkName = typeof INLINE_MARKS[number]['name'];

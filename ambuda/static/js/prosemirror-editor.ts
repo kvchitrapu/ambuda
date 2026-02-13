@@ -982,7 +982,13 @@ export default class {
       doc,
       plugins: [
         history(),
-        keymap({ 'Mod-z': pmUndo, 'Mod-y': pmRedo, 'Shift-Enter': createBlockBelow }),
+        keymap({
+          'Mod-z': pmUndo,
+          'Mod-y': pmRedo,
+          'Shift-Enter': createBlockBelow,
+          'Mod-b': (state, dispatch) => { this.toggleMark('bold'); return true; },
+          'Mod-i': (state, dispatch) => { this.toggleMark('italic'); return true; },
+        }),
         keymap(baseKeymap),
         activeWordPlugin(this.onActiveWordChange),
       ],

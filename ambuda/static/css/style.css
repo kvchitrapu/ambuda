@@ -196,6 +196,14 @@
     @apply border-b-2 pr-1;
   }
 
+  .pm-bold {
+    font-weight: bold;
+  }
+
+  .pm-italic {
+    font-style: italic;
+  }
+
   .pm-error {
     @apply bg-red-100 text-red-800 border-red-500;
   }

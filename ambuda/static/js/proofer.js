@@ -3,7 +3,7 @@
 
 import { $ } from './core.ts';
 import ProofingEditor, { XMLView } from './prosemirror-editor.ts';
-import { INLINE_MARKS } from './marks-config.ts';
+import { INLINE_MARKS, MARK_GROUPS } from './marks-config.ts';
 import routes from './routes';
 
 const CONFIG_KEY = 'proofing-editor';
@@ -209,6 +209,7 @@ export default () => ({
   showAdvancedOptions: false,
   showMarkToolbar: false,
   inlineMarks: INLINE_MARKS,
+  markGroups: MARK_GROUPS,
 
   pageState: {},
 
@@ -879,6 +880,10 @@ export default () => ({
     Alpine.raw(this.editor).toggleMark(markName);
   },
 
+  marksForGroup(groupKey) {
+    return this.inlineMarks.filter((m) => m.group === groupKey);
+  },
+
   insertBlock() {
     Alpine.raw(this.editor).insertBlock();
   },
@@ -1048,11 +1053,6 @@ export default () => ({
     // Sync to text area.
     const currentContent = Alpine.raw(this.editor).getText();
     $('#content').value = currentContent;
-
-    if (this.originalContent.trim() === currentContent.trim()) {
-      this.showAlert('info', 'No changes to save.');
-      return;
-    }
 
     this.changesPreview = this.generateChangesPreview();
 
