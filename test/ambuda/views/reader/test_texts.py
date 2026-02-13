@@ -12,6 +12,7 @@ def test_index(client):
 
 def test_text(client):
     resp = client.get("/texts/pariksha/")
+    assert resp.status_code == 200
     assert d("parIkSA") in resp.text
 
 

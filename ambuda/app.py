@@ -159,6 +159,7 @@ def create_app(config_env: str):
             "slp2dev": filters.slp_to_devanagari,
             "devanagari": filters.devanagari,
             "hk_to_user_script": filters.hk_to_user_script,
+            "hk_slug_to_user_script": filters.hk_slug_to_user_script,
             "devanagari_to_user_script": filters.devanagari_to_user_script,
             "roman": filters.roman,
             "markdown": filters.markdown,

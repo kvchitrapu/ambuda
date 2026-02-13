@@ -35,23 +35,26 @@ def devanagari(s: str) -> str:
 @pass_context
 def hk_to_user_script(_ctx, s: str) -> str:
     """@pass_context prevents constant-folding in Jinja."""
-    script_name = session.get("script", "Devanagari")
-    try:
-        scheme = Scheme.from_string(script_name)
-    except ValueError:
-        scheme = Scheme.Devanagari
-    return transliterate(s, Scheme.HarvardKyoto, scheme)
+    return transliterate(s, Scheme.HarvardKyoto, _user_scheme())
+
+
+@pass_context
+def hk_slug_to_user_script(_ctx, s: str) -> str:
+    """Like hk_to_user_script but preserves dots (instead of converting to dandas)."""
+    return transliterate(s, Scheme.HarvardKyoto, _user_scheme()).replace("\u0964", ".")
 
 
 @pass_context
 def devanagari_to_user_script(_ctx, s: str) -> str:
     """@pass_context prevents constant-folding in Jinja."""
-    script_name = session.get("script", "Devanagari")
+    return transliterate(s, Scheme.Devanagari, _user_scheme())
+
+
+def _user_scheme() -> Scheme:
     try:
-        scheme = Scheme.from_string(script_name)
+        return Scheme.from_string(session.get("script", "Devanagari"))
     except ValueError:
-        scheme = Scheme.Devanagari
-    return transliterate(s, Scheme.Devanagari, scheme)
+        return Scheme.Devanagari
 
 
 def roman(s: str) -> str:

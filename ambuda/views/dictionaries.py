@@ -13,7 +13,7 @@ If a source list is invalid, we raise a 404 error.
 
 import functools
 
-from flask import Blueprint, abort, redirect, render_template, request, url_for
+from flask import Blueprint, abort, redirect, render_template, request, session, url_for
 from vidyut.lipi import detect, transliterate, Scheme
 
 import ambuda.queries as q
@@ -134,9 +134,24 @@ def entry(sources, query):
         abort(404)
 
     entries = _fetch_entries(sources, query)
+
+    scheme = _get_user_scheme()
+    if scheme != Scheme.Devanagari:
+        entries = {
+            slug: [xml.transliterate_html(e, Scheme.Devanagari, scheme) for e in blobs]
+            for slug, blobs in entries.items()
+        }
+
     return render_template(
         "dictionaries/index.html",
         query=query,
         entries=entries,
         dictionaries=dictionaries,
     )
+
+
+def _get_user_scheme() -> Scheme:
+    try:
+        return Scheme.from_string(session.get("script", "Devanagari"))
+    except ValueError:
+        return Scheme.Devanagari

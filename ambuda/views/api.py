@@ -15,11 +15,13 @@ from flask import (
     jsonify,
     render_template,
     request,
+    session,
     url_for,
 )
 from flask_login import current_user, login_required
 from pydantic import BaseModel
 from sqlalchemy import select
+from vidyut.lipi import Scheme
 
 from ambuda import database as db
 from ambuda import queries as q
@@ -353,30 +355,15 @@ def block_htmx(text_slug, block_slug):
 
 @bp.route("/texts/<text_slug>/<section_slug>")
 def reader_json(text_slug, section_slug):
-    """Return section data as JSON. Currently unused (bootstrapped inline)."""
-    from ambuda.views.reader.schema import Section
-    from ambuda.views.reader.texts import _hk_to_dev, _make_section_url, _prev_cur_next
+    """Return section data as JSON."""
+    from ambuda.views.reader.texts import _build_section_data
 
     text_ = q.text(text_slug)
     if text_ is None:
         abort(404)
     assert text_
 
-    try:
-        prev, cur, next_ = _prev_cur_next(text_.sections, section_slug)
-    except ValueError:
-        abort(404)
-
-    with q.get_session() as _:
-        html_blocks = [xml.transform_text_block(b.xml) for b in cur.blocks]
-
-    data = Section(
-        text_title=_hk_to_dev(text_.title),
-        section_title=_hk_to_dev(cur.title),
-        blocks=html_blocks,
-        prev_url=_make_section_url(text_, prev),
-        next_url=_make_section_url(text_, next_),
-    )
+    data = _build_section_data(text_, section_slug)
     return jsonify(data)
 
 
@@ -435,12 +422,17 @@ def entry_htmx(sources, query):
         abort(404)
 
     entries = _fetch_entries(sources, query)
-    return render_template(
+    result = render_template(
         "htmx/dictionary-results.html",
         query=query,
         entries=entries,
         dictionaries=dictionaries,
     )
+
+    scheme = _scheme_from_param(request.args.get("script"))
+    if scheme != Scheme.Devanagari:
+        result = xml.transliterate_html(result, Scheme.Devanagari, scheme)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -483,9 +475,29 @@ def block_parse_htmx(text_slug, block_slug):
 
     tokens = parse_utils.extract_tokens(parse.data)
     aligned = align_text_with_parse(block.xml, tokens)
-    return render_template(
+    result = render_template(
         "htmx/parsed-tokens.html",
         text_slug=text_slug,
         block_slug=block_slug,
         aligned=aligned,
     )
+
+    scheme = _scheme_from_session()
+    result = xml.transliterate_html(result, Scheme.Devanagari, scheme)
+    return result
+
+
+def _scheme_from_session() -> Scheme:
+    try:
+        return Scheme.from_string(session.get("script", "Devanagari"))
+    except ValueError:
+        return Scheme.Devanagari
+
+
+def _scheme_from_param(script_param: str | None) -> Scheme:
+    if not script_param:
+        return Scheme.Devanagari
+    try:
+        return Scheme.from_string(script_param)
+    except ValueError:
+        return Scheme.Devanagari

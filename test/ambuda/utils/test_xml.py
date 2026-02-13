@@ -102,7 +102,171 @@ def test_parse_tei_header():
     parsed = x.parse_tei_header(header)
     assert parsed.title == "TITLE"
     assert parsed.author == "BIBL_AUTHOR"
+    assert parsed.editor == "BIBL_EDITOR"
     assert parsed.publisher == "BIBL_PUBLISHER"
+    assert parsed.publisher_place == "BIBL_PUB_PLACE"
+    assert parsed.publication_year == "BIBL_PUB_YEAR"
+
+
+def test_parse_tei_header__author_fallback_to_titlestmt():
+    header = """
+    <teiHeader xml:lang="en">
+      <fileDesc>
+        <titleStmt>
+          <title>TITLE</title>
+          <author>TITLESTMT_AUTHOR</author>
+        </titleStmt>
+        <sourceDesc>
+          <bibl>
+            <title>Some Title</title>
+          </bibl>
+        </sourceDesc>
+      </fileDesc>
+    </teiHeader>
+    """
+    parsed = x.parse_tei_header(header)
+    assert parsed.author == "TITLESTMT_AUTHOR"
+
+
+def test_parse_tei_header__source_unstructured_bibl():
+    header = """
+    <teiHeader xml:lang="en">
+      <fileDesc>
+        <titleStmt>
+          <title>TITLE</title>
+        </titleStmt>
+        <sourceDesc>
+          <bibl>Smith, J. (1990). A Great Book. Publisher.</bibl>
+        </sourceDesc>
+      </fileDesc>
+    </teiHeader>
+    """
+    parsed = x.parse_tei_header(header)
+    assert parsed.source == "Smith, J. (1990). A Great Book. Publisher."
+
+
+def test_parse_tei_header__credits():
+    header = """
+    <teiHeader xml:lang="en">
+      <fileDesc>
+        <titleStmt>
+          <title>TITLE</title>
+          <respStmt>
+            <resp>Data entry</resp>
+            <name>Alice</name>
+            <name>Bob</name>
+          </respStmt>
+          <respStmt>
+            <resp>Proofreading</resp>
+            <name>Charlie</name>
+          </respStmt>
+        </titleStmt>
+      </fileDesc>
+    </teiHeader>
+    """
+    parsed = x.parse_tei_header(header)
+    assert parsed.credits == [
+        ("Data entry", ["Alice", "Bob"]),
+        ("Proofreading", ["Charlie"]),
+    ]
+
+
+def test_parse_tei_header__notes():
+    header = """
+    <teiHeader xml:lang="en">
+      <fileDesc>
+        <titleStmt>
+          <title>TITLE</title>
+        </titleStmt>
+        <notesStmt>
+          <note type="legacyheader">legacy stuff</note>
+          <note>This text was sourced from GRETIL.</note>
+        </notesStmt>
+      </fileDesc>
+    </teiHeader>
+    """
+    parsed = x.parse_tei_header(header)
+    assert "This text was sourced from GRETIL." in parsed.notes
+
+
+def test_parse_tei_header__notes_with_ref():
+    header = """
+    <teiHeader xml:lang="en">
+      <fileDesc>
+        <titleStmt>
+          <title>TITLE</title>
+        </titleStmt>
+        <notesStmt>
+          <note>See <ref target="http://example.com">this page</ref> for details.</note>
+        </notesStmt>
+      </fileDesc>
+    </teiHeader>
+    """
+    parsed = x.parse_tei_header(header)
+    assert '<a href="http://example.com">this page</a>' in parsed.notes
+    assert "See" in parsed.notes
+    assert "for details." in parsed.notes
+
+
+def test_parse_tei_header__notes_with_lb():
+    header = """
+    <teiHeader xml:lang="en">
+      <fileDesc>
+        <titleStmt>
+          <title>TITLE</title>
+        </titleStmt>
+        <notesStmt>
+          <note>Line one<lb />Line two</note>
+        </notesStmt>
+      </fileDesc>
+    </teiHeader>
+    """
+    parsed = x.parse_tei_header(header)
+    assert "<br" in parsed.notes
+    assert "Line one" in parsed.notes
+    assert "Line two" in parsed.notes
+
+
+def test_parse_tei_header__revision_desc():
+    header = """
+    <teiHeader xml:lang="en">
+      <fileDesc>
+        <titleStmt>
+          <title>TITLE</title>
+        </titleStmt>
+      </fileDesc>
+      <revisionDesc>
+        <change when="2020-01-01">Initial encoding</change>
+        <change when="2021-06-15">Added metadata</change>
+      </revisionDesc>
+    </teiHeader>
+    """
+    parsed = x.parse_tei_header(header)
+    assert "Initial encoding" in parsed.revision_desc
+    assert "Added metadata" in parsed.revision_desc
+    assert "<p>" in parsed.revision_desc
+
+
+def test_parse_tei_header__publication_year_fallback():
+    header = """
+    <teiHeader xml:lang="en">
+      <fileDesc>
+        <titleStmt>
+          <title>TITLE</title>
+        </titleStmt>
+        <publicationStmt>
+          <date when-iso="2020">2020</date>
+        </publicationStmt>
+        <sourceDesc>
+          <bibl>
+            <title>Some Title</title>
+          </bibl>
+        </sourceDesc>
+      </fileDesc>
+    </teiHeader>
+    """
+    parsed = x.parse_tei_header(header)
+    assert parsed.publication_year == "2020"
 
 
 def test_parse_tei_header__elements_missing():
@@ -118,6 +282,12 @@ def test_parse_tei_header__elements_missing():
     assert parsed.title == "Unknown"
     assert parsed.author == "Unknown"
     assert parsed.publisher == "Unknown"
+    assert parsed.editor == ""
+    assert parsed.publication_year == ""
+    assert parsed.source == ""
+    assert parsed.credits is None
+    assert parsed.notes == ""
+    assert parsed.revision_desc == ""
 
 
 def test_parse_tei_header__undefined():

@@ -8,6 +8,7 @@ from flask import (
     abort,
     current_app,
     render_template,
+    session,
     url_for,
     send_file,
 )
@@ -17,8 +18,6 @@ import ambuda.database as db
 import ambuda.queries as q
 from ambuda.models.texts import TextConfig
 from ambuda.utils import text_utils
-from ambuda.utils import text_exports
-from ambuda.utils.text_exports import ExportType, EXPORTS
 from ambuda.utils import xml
 from ambuda.utils.json_serde import AmbudaJSONEncoder
 from ambuda.utils.text_validation import validate
@@ -37,7 +36,7 @@ SINGLE_SECTION_SLUG = "all"
 
 
 def _prev_cur_next(sections: list[db.TextSection], slug: str):
-    """Get the previous, current, and next esctions.
+    """Get the previous, current, and next sections.
 
     :param sections: all of the sections in this text.
     :param slug: the slug for the current section.
@@ -61,18 +60,107 @@ def _prev_cur_next(sections: list[db.TextSection], slug: str):
 def _make_section_url(text: db.Text, section: db.TextSection | None) -> str | None:
     if section:
         return url_for("texts.section", text_slug=text.slug, section_slug=section.slug)
-    else:
-        return None
+    return None
 
 
-def _hk_to_dev(s: str) -> str:
-    return transliterate(s, Scheme.HarvardKyoto, Scheme.Devanagari)
+def _page_url(page) -> str | None:
+    if page:
+        return url_for(
+            "proofing.page.edit",
+            project_slug=page.project.slug,
+            page_slug=page.slug,
+        )
+    return None
+
+
+def _build_section_data(text_: db.Text, section_slug: str) -> Section:
+    try:
+        prev, cur, next_ = _prev_cur_next(text_.sections, section_slug)
+    except ValueError:
+        abort(404)
+
+    db_session = q.get_session()
+
+    block_load = orm.selectinload(db.TextSection.blocks)
+    page_load = block_load.selectinload(db.TextBlock.page).selectinload(db.Page.project)
+    parent_load = (
+        block_load.selectinload(db.TextBlock.parents)
+        .selectinload(db.TextBlock.page)
+        .selectinload(db.Page.project)
+    )
+    stmt = (
+        select(db.TextSection)
+        .filter_by(text_id=text_.id, slug=section_slug)
+        .options(block_load, page_load, parent_load)
+    )
+    cur = db_session.scalars(stmt).first()
+
+    blocks = []
+    for block in cur.blocks:
+        # HACK: skip these for now.
+        if block.xml.startswith("<title") or block.xml.startswith("<subtitle"):
+            continue
+
+        parent_blocks = None
+        if text_.parent_id and block.parents:
+            parent_blocks = [
+                Block(
+                    slug=pb.slug,
+                    mula=xml.transform_text_block(pb.xml),
+                    page_url=_page_url(pb.page),
+                )
+                for pb in block.parents
+            ]
+
+        blocks.append(
+            Block(
+                slug=block.slug,
+                mula=xml.transform_text_block(block.xml),
+                page_url=_page_url(block.page),
+                parent_blocks=parent_blocks,
+            )
+        )
+
+    scheme = _get_user_scheme()
+    if scheme != Scheme.Devanagari:
+        for block in blocks:
+            block.mula = xml.transliterate_html(block.mula, Scheme.Devanagari, scheme)
+            if block.parent_blocks:
+                for pb in block.parent_blocks:
+                    pb.mula = xml.transliterate_html(pb.mula, Scheme.Devanagari, scheme)
+
+    return Section(
+        text_title=transliterate(text_.title, Scheme.HarvardKyoto, scheme),
+        section_title=_transliterate_slug(cur.title, scheme),
+        section_slug=section_slug,
+        blocks=blocks,
+        prev_url=_make_section_url(text_, prev),
+        next_url=_make_section_url(text_, next_),
+    )
+
+
+def _transliterate_slug(s: str, scheme: Scheme) -> str:
+    return transliterate(s, Scheme.HarvardKyoto, scheme).replace("\u0964", ".")
+
+
+def _get_user_scheme() -> Scheme:
+    script_name = session.get("script", "Devanagari")
+    try:
+        return Scheme.from_string(script_name)
+    except ValueError:
+        return Scheme.Devanagari
+
+
+def _export_key(x: db.TextExport) -> tuple:
+    for i, ext in enumerate(("txt", "xml", "pdf", "csv")):
+        if x.slug.endswith(ext):
+            return (i, x.slug)
+    return (4, x.slug)
 
 
 @bp.route("/")
 def index():
     """Show all texts."""
-
     grouped_entries = text_utils.create_grouped_text_entries()
     return render_template("texts/index.html", grouped_entries=grouped_entries)
 
@@ -80,42 +168,16 @@ def index():
 @bp.route("/<slug>/")
 def text(slug):
     """Show a text's title page and contents."""
-    text = q.text(slug)
-    if text is None:
+    text_ = q.text(slug)
+    if text_ is None:
         abort(404)
-    assert text
+    assert text_
 
-    try:
-        config = TextConfig.model_validate_json(text.config)
-    except Exception:
-        config = TextConfig()
+    if not text_.sections:
+        abort(404)
 
-    prefix_titles = config.titles.fixed
-
-    section_groups = {}
-    for section in text.sections:
-        key, _, _ = section.slug.rpartition(".")
-        if key not in section_groups:
-            section_groups[key] = []
-
-        name = section.slug
-        if section.slug.count(".") == 1:
-            x, y = section.slug.split(".")
-            # NOTE: experimental -- metadata paths may move at any time.
-            try:
-                pattern = config.titles.patterns["x.y"]
-            except Exception:
-                pattern = None
-            if pattern:
-                name = pattern.format(x=x, y=y)
-        section_groups[key].append((section.slug, name))
-
-    return render_template(
-        "texts/text.html",
-        text=text,
-        section_groups=section_groups,
-        prefix_titles=prefix_titles,
-    )
+    first_section_slug = text_.sections[0].slug
+    return section(slug, first_section_slug)
 
 
 @bp.route("/<slug>/about")
@@ -142,18 +204,7 @@ def text_resources(slug):
         abort(404)
     assert text
 
-    def _key_fn(x: db.TextExport) -> tuple:
-        if x.slug.endswith("txt"):
-            return (0, x.slug)
-        if x.slug.endswith("xml"):
-            return (1, x.slug)
-        if x.slug.endswith("pdf"):
-            return (2, x.slug)
-        if x.slug.endswith("csv"):
-            return (3, x.slug)
-        return (4, x.slug)
-
-    exports = sorted(text.exports, key=_key_fn)
+    exports = sorted(text.exports, key=_export_key)
     return render_template("texts/text-resources.html", text=text, exports=exports)
 
 
@@ -233,79 +284,40 @@ def section(text_slug, section_slug):
         if section_slug != SINGLE_SECTION_SLUG:
             abort(404)
 
-    session = q.get_session()
-    has_no_parse = not session.scalar(
+    db_session = q.get_session()
+    has_no_parse = not db_session.scalar(
         select(exists().where(db.BlockParse.text_id == text_.id))
     )
 
-    # Fetch section with eager-loaded blocks and relationships
-    block_load = orm.selectinload(db.TextSection.blocks)
-    page_load = block_load.selectinload(db.TextBlock.page).selectinload(db.Page.project)
-    parent_load = (
-        block_load.selectinload(db.TextBlock.parents)
-        .selectinload(db.TextBlock.page)
-        .selectinload(db.Page.project)
-    )
-    stmt = (
-        select(db.TextSection)
-        .filter_by(text_id=text_.id, slug=section_slug)
-        .options(block_load, page_load, parent_load)
-    )
-    cur = session.scalars(stmt).first()
-
-    blocks = []
-    for block in cur.blocks:
-        page = block.page
-        page_url = None
-        if page:
-            page_url = url_for(
-                "proofing.page.edit",
-                project_slug=page.project.slug,
-                page_slug=page.slug,
-            )
-
-        # Fetch parent blocks if this text has a parent
-        parent_blocks = None
-        if text_.parent_id and block.parents:
-            parent_blocks = []
-            for parent_block in block.parents:
-                parent_page = parent_block.page
-                parent_page_url = None
-                if parent_page:
-                    parent_page_url = url_for(
-                        "proofing.page.edit",
-                        project_slug=parent_page.project.slug,
-                        page_slug=parent_page.slug,
-                    )
-                parent_blocks.append(
-                    Block(
-                        slug=parent_block.slug,
-                        mula=xml.transform_text_block(parent_block.xml),
-                        page_url=parent_page_url,
-                    )
-                )
-
-        # HACK: skip these for now.
-        if block.xml.startswith("<title") or block.xml.startswith("<subtitle"):
-            continue
-
-        blocks.append(
-            Block(
-                slug=block.slug,
-                mula=xml.transform_text_block(block.xml),
-                page_url=page_url,
-                parent_blocks=parent_blocks,
-            )
-        )
-
-    data = Section(
-        text_title=_hk_to_dev(text_.title),
-        section_title=_hk_to_dev(cur.title),
-        blocks=blocks,
-        prev_url=_make_section_url(text_, prev),
-        next_url=_make_section_url(text_, next_),
-    )
+    data = _build_section_data(text_, section_slug)
     json_payload = json.dumps(data, cls=AmbudaJSONEncoder)
+
+    try:
+        if isinstance(text_.config, str):
+            config = TextConfig.model_validate_json(text_.config)
+        elif isinstance(text_.config, dict):
+            config = TextConfig.model_validate(text_.config)
+        else:
+            config = TextConfig()
+    except Exception:
+        config = TextConfig()
+
+    prefix_titles = config.titles.fixed
+    section_groups = {}
+    for s in text_.sections:
+        key, _, _ = s.slug.rpartition(".")
+        if key not in section_groups:
+            section_groups[key] = []
+        name = s.slug
+        if s.slug.count(".") == 1:
+            x, y = s.slug.split(".")
+            pattern = config.titles.patterns.get("x.y")
+            if pattern:
+                name = pattern.format(x=x, y=y)
+        section_groups[key].append((s.slug, name))
+
+    header_data = xml.parse_tei_header(text_.header)
+    exports = sorted(text_.exports, key=_export_key)
 
     return render_template(
         "texts/section.html",
@@ -317,4 +329,9 @@ def section(text_slug, section_slug):
         html_blocks=data.blocks,
         has_no_parse=has_no_parse,
         is_single_section_text=is_single_section_text,
+        section_groups=section_groups,
+        prefix_titles=prefix_titles,
+        text_about=header_data,
+        raw_header=text_.header,
+        exports=exports,
     )

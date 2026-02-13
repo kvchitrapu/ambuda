@@ -31,6 +31,7 @@ from typing import NewType
 from xml.etree import ElementTree as ET
 
 from lxml import etree
+from lxml.html import fragment_fromstring, tostring as html_tostring
 
 import defusedxml.ElementTree as DET
 from vidyut.lipi import transliterate, Scheme
@@ -47,11 +48,17 @@ def indent_xml_file_in_place(path: Path) -> None:
 
 @dataclass
 class ParsedTEIHeader:
-    title: str
-    author: str
-    publisher: str
-    publisher_place: str
-    availability: str
+    title: str = "Unknown"
+    author: str = "Unknown"
+    editor: str = ""
+    publisher: str = "Unknown"
+    publisher_place: str = "Unknown"
+    publication_year: str = ""
+    availability: str = ""
+    source: str = ""
+    credits: list[tuple[str, list[str]]] | None = None
+    notes: str = ""
+    revision_desc: str = ""
 
 
 @dataclass
@@ -289,6 +296,8 @@ tei_header_xml = {
     "bibl": elem("p"),
     "licence": elem("p"),
     "ref": Rule("a", _rename({"target": "href"})),
+    "lb": elem("br"),
+    "change": elem("p"),
 }
 
 
@@ -421,12 +430,64 @@ def parse_tei_header(blob: str | None) -> ParsedTEIHeader:
     else:
         availability = ""
 
+    author = _text_of(file_desc, "./sourceDesc/bibl/author", "")
+    if not author:
+        author = _text_of(file_desc, "./titleStmt/author", "Unknown")
+
+    editor = _text_of(file_desc, "./sourceDesc/bibl/editor", "")
+
+    publication_year = _text_of(file_desc, "./sourceDesc/bibl/date", "")
+    if not publication_year:
+        pub_date_el = file_desc.find("./publicationStmt/date")
+        if pub_date_el is not None:
+            publication_year = pub_date_el.get("when-iso", "") or pub_date_el.text or ""
+
+    source = ""
+    bibl_el = file_desc.find("./sourceDesc/bibl")
+    if bibl_el is not None and len(bibl_el) == 0:
+        source = (bibl_el.text or "").strip()
+
+    credits = []
+    for resp_stmt in file_desc.findall("./titleStmt/respStmt"):
+        resp_el = resp_stmt.find("resp")
+        resp_text = (resp_el.text or "").strip() if resp_el is not None else ""
+        names = [
+            n.text.strip()
+            for n in resp_stmt.findall("name")
+            if n.text and n.text.strip()
+        ]
+        if resp_text or names:
+            credits.append((resp_text, names))
+
+    notes = ""
+    notes_stmt = file_desc.find("./notesStmt")
+    if notes_stmt is not None:
+        for note_el in notes_stmt.findall("note"):
+            if note_el.get("type") == "legacyheader":
+                continue
+            note_el.tag = "span"
+            notes = transform(note_el, tei_header_xml).strip()
+            if notes:
+                break
+
+    revision_desc = ""
+    rev_desc_el = xml.find("./revisionDesc")
+    if rev_desc_el is not None:
+        rev_desc_el.tag = "div"
+        revision_desc = transform(rev_desc_el, tei_header_xml).strip()
+
     return ParsedTEIHeader(
         title=_text_of(file_desc, "./titleStmt/title", "Unknown"),
-        author=_text_of(file_desc, "./sourceDesc/bibl/author", "Unknown"),
+        author=author,
+        editor=editor,
         publisher=_text_of(file_desc, "./sourceDesc/bibl/publisher", "Unknown"),
         publisher_place=_text_of(file_desc, "./sourceDesc/bibl/pubPlace", "Unknown"),
+        publication_year=publication_year,
         availability=availability,
+        source=source,
+        credits=credits or None,
+        notes=notes,
+        revision_desc=revision_desc,
     )
 
 
@@ -447,3 +508,31 @@ def transform_text_block(block_blob: str) -> str:
     # get the XML ID from `database.Block` instead.
     xml = DET.fromstring(block_blob)
     return transform(xml, transforms=tei_xml)
+
+
+def transliterate_html(html: str, source: Scheme, dest: Scheme) -> str:
+    has_text_work = source != dest
+    has_lemma_work = dest != Scheme.Slp1
+    if not has_text_work and not has_lemma_work:
+        return html
+
+    root = fragment_fromstring(html, create_parent="div")
+    for el in root.iter():
+        if el.attrib.get("lang") == "en":
+            continue
+
+        if has_text_work:
+            if el.text:
+                el.text = transliterate(el.text, source, dest)
+            if el.tail and el is not root:
+                el.tail = transliterate(el.tail, source, dest)
+
+        if has_lemma_work and el.tag == "s-w" and "lemma" in el.attrib:
+            el.attrib["lemma"] = transliterate(el.attrib["lemma"], Scheme.Slp1, dest)
+
+    parts = []
+    if root.text:
+        parts.append(root.text)
+    for child in root:
+        parts.append(html_tostring(child, encoding="unicode"))
+    return "".join(parts)

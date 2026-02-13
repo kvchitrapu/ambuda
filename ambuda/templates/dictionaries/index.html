@@ -49,9 +49,8 @@ different languages.
   <select
       id="dict--script"
       class="f-select"
-      x-model="uiScript"
-      @change="updateScript">
-    {% include 'include/script-options-js.html' %}
+      @change="changeScript($event.target.value)">
+    {% include 'include/script-options-vidyut.html' %}
   </select>
 </form>
 {% endmacro %}
@@ -98,7 +97,7 @@ different languages.
     {{ _('Dictionary lookup') }}
   </h1>
 </header>
-<div x-data="dictionary">
+<div x-data="dictionary" data-script="{{ session.get('script', 'Devanagari') }}">
   {{ dictionary_form() }}
   {{ dictionary_history() }}
   {{ dictionary_response(query, entries) }}

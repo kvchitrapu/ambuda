@@ -19,16 +19,16 @@ For the corresponding JavaScript bindings and logic, see `reader.js`.
   <div class="text-center pb-4 font-bold border-b">
     {% if prev or next %}
       <h1 class="text-2xl md:text-4xl"
-          x-text="transliterateStr(data.section_title)">
-        {{ section.title | devanagari }}
+          x-text="data.section_title">
+        {{ section.title | hk_to_user_script }}
       </h1>
       <a class="block text-sm hover:text-green-600" href="{{ url }}"
-          x-text="transliterateStr(data.text_title)">
-        {{ text.title | devanagari }}
+          x-text="data.text_title">
+        {{ text.title | hk_to_user_script }}
       </a>
     {% else %}
       <h1 class="text-2xl md:text-4xl">
-        {{ text.title | devanagari }}
+        {{ text.title | hk_to_user_script }}
 
         {% if text.is_p0 %}
         <a href="{{ url_for('about.unproofed_texts') }}">
@@ -54,69 +54,110 @@ For the corresponding JavaScript bindings and logic, see `reader.js`.
 
 
 {# Prev/next navigation links in the page footer. #}
-{% macro _footer_nav_link(text, section, display_text) %}
+{% macro _nav_link(text, section, display_text, direction) %}
 {% set base = "rounded text-2xl h-12 w-12 leading-[3rem] text-center" %}
+{% set data_url = "data.prev_url" if direction == "prev" else "data.next_url" %}
+{% set go_fn = "goToPrev" if direction == "prev" else "goToNext" %}
 {% if section %}
   {% set url = url_for('texts.section', text_slug=text.slug, section_slug=section.slug) %}
-  <a class="{{ base }} hover:bg-slate-100" href="{{ url }}"> {{ display_text | safe }}</a>
+  <a class="{{ base }} hover:bg-slate-100"
+     href="{{ url }}"
+     :href="{{ data_url }}"
+     :class="{{ data_url }} ? 'hover:bg-slate-100' : 'text-slate-300 pointer-events-none'"
+     @click.prevent="{{ go_fn }}()">{{ display_text | safe }}</a>
 {% else %}
-<span class="{{ base }} text-slate-300">{{ display_text | safe }}</span>
+  <a class="{{ base }} text-slate-300 pointer-events-none" href="#"
+     :href="{{ data_url }} || '#'"
+     :class="{{ data_url }} ? 'hover:bg-slate-100 !text-current !pointer-events-auto' : 'text-slate-300 pointer-events-none'"
+     @click.prevent="{{ go_fn }}()">{{ display_text | safe }}</a>
 {% endif %}
 {% endmacro %}
 
 
-{# Reader settings. In the future, these will be either on a separate page
-or in their own modal window. #}
-{% macro settings() %}
-  <div class="hidden md:inline text-sm border-r px-4">
-    <span>{{ _('Font Size:') }}</span>
-    <select class="f-select" x-model="fontSize" @change="saveSettings">
-      <option value="md:text-base">{{ _('Tiny') }}</option>
-      <option value="md:text-lg">{{ _('Small') }}</option>
-      <option value="md:text-xl" selected>{{ _('Medium') }}</option>
-      <option value="md:text-2xl">{{ _('Large') }}</option>
-      <option value="md:text-3xl">{{ _('X-Large') }}</option>
-    </select>
+{# Reader settings modal. #}
+{% macro settings_modal() %}
+<div x-show="showSettings" x-cloak
+     class="fixed inset-0 z-[60] flex items-center justify-center"
+     @keydown.escape.window="showSettings = false">
+  <div class="absolute inset-0 bg-black/40" @click="showSettings = false"></div>
+
+  <div class="relative bg-white rounded-lg shadow-xl w-80 p-6"
+       x-show="showSettings" x-transition>
+    <div class="flex items-center justify-between mb-6">
+      <h2 class="text-lg font-semibold">{{ _('Settings') }}</h2>
+      <button @click="showSettings = false" class="text-2xl leading-none text-slate-400 hover:text-slate-700">&times;</button>
+    </div>
+
+    <div class="space-y-5">
+      <div>
+        <label class="block text-sm font-medium text-slate-600 mb-1">{{ _('Text Width') }}</label>
+        <select class="f-select w-full" x-model="textWidth" @change="saveSettings">
+          <option value="md:max-w-xl">{{ _('Narrow') }}</option>
+          <option value="md:max-w-3xl">{{ _('Wide') }}</option>
+          <option value="max-w-none">{{ _('Full') }}</option>
+        </select>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-600 mb-1">{{ _('Font Size') }}</label>
+        <select class="f-select w-full" x-model="fontSize" @change="saveSettings">
+          <option value="md:text-base">{{ _('Tiny') }}</option>
+          <option value="md:text-lg">{{ _('Small') }}</option>
+          <option value="md:text-xl">{{ _('Medium') }}</option>
+          <option value="md:text-2xl">{{ _('Large') }}</option>
+          <option value="md:text-3xl">{{ _('X-Large') }}</option>
+        </select>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-600 mb-1">{{ _('Script') }}</label>
+        <select id="switch-sa" class="f-select w-full"
+                @change="changeScript($event.target.value)">
+          {% include 'include/script-options-vidyut.html' %}
+        </select>
+      </div>
+
+    </div>
   </div>
-  <div class="text-sm border-r px-4">
-    <span class="hidden md:inline">{{ _('Script:') }}</span>
-    <select id="switch-sa" class="f-select" @change="saveSettings" x-model="script">
-      {% include 'include/script-options-js.html' %}
-    </select>
-  </div>
-  {% if not has_no_parse %}
-  <div class="hidden md:inline text-sm border-r px-4">
-    <span>{{ _('Parsed View:') }}</span>
-    <select id="switch-parse-options" class="f-select" x-model="parseLayout" @change="saveSettings">
-      <option value="in-place" selected>{{ _('In place') }}</option>
-      <option value="side-by-side">{{ _('Side by side') }}</option>
-    </select>
-  </div>
-  {% endif %}
+</div>
 {% endmacro %}
 
 
-{# Footer, including settings and nav links. #}
-{% macro footer() %}
-{# z-50 so that the footer renders on top of the sidebar. #}
-<footer class="flex items-center justify-between fixed bg-white left-0 right-0 bottom-0 h-12 border-t z-50">
-  <div class="text-sm pl-4">
-    <a class="hover:underline" href="{{ url_for('texts.text', slug=text.slug) }}"
-        x-text="transliterateStr(data.text_title)">
-      {{ text.title | devanagari }}
+{% macro navbar() %}
+<nav class="flex items-center justify-between fixed bg-white left-0 right-0 top-0 h-12 border-b z-50">
+  <div class="flex items-center text-sm pl-4 min-w-0">
+    <a class="text-slate-400 hover:text-slate-700 shrink-0" href="{{ url_for('site.index') }}">Ambuda</a>
+    <span class="text-slate-300 mx-1.5 shrink-0">/</span>
+    <a class="text-slate-400 hover:text-slate-700 truncate" href="{{ url_for('texts.text', slug=text.slug) }}"
+        x-text="data.text_title">
+      {{ text.title | hk_to_user_script }}
     </a>
     {% if not is_single_section_text %}
-    <span x-text="transliterateStr(data.section_title)">
-      {{ section.title | devanagari }}
+    <span class="text-slate-300 mx-1.5 shrink-0">/</span>
+    <span class="text-slate-500 truncate" x-text="data.section_title">
+      {{ section.title | hk_to_user_script }}
     </span>
     {% endif %}
   </div>
-  <div class="flex items-center">
-    {{ settings() }}
-    {{ _footer_nav_link(text, prev, '&laquo;') }}
-    {{ _footer_nav_link(text, next, '&raquo;') }}
+  <div class="flex items-center shrink-0">
+    <button @click="showSidebar = !showSidebar"
+            class="flex items-center gap-1.5 text-slate-400 hover:text-slate-700 px-3 h-12 border-l"
+            title="{{ _('Sidebar') }}">
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
+        <rect x="1" y="2" width="16" height="14" rx="2"/><line x1="11" y1="2" x2="11" y2="16"/>
+      </svg>
+      <span class="text-sm hidden sm:inline">{{ _('Sidebar') }}</span>
+    </button>
+    <button @click="showSettings = true"
+            class="flex items-center gap-1.5 text-slate-400 hover:text-slate-700 px-3 h-12 border-l border-r"
+            title="{{ _('Settings') }}">
+      <svg width="18" height="18"><use href="#settings"></use></svg>
+      <span class="text-sm hidden sm:inline">{{ _('Settings') }}</span>
+    </button>
+    {{ _nav_link(text, prev, '&laquo;', 'prev') }}
+    {{ _nav_link(text, next, '&raquo;', 'next') }}
   </div>
-</footer>
+</nav>
 {% endmacro %}
 
 
@@ -124,41 +165,284 @@ or in their own modal window. #}
 
 On small screens, the sidebar is fixed and covers the entire screen.
 On wide screens, the sidebar is on the right side of a split view.
-In the future, it might be nice to let readers customize where this
-sidebar is positioned.
-
-h-full-minus-nav is defined in style.css.
-lg:top-10 is to vertically center the sidebar when sticky scrolling.
 #}
 {% macro sidebar() %}
 <div id="sidebar" class="
-    overscroll-contain
-    fixed top-1/2 bottom-0 left-0 right-0
-    flex flex-col flex-1
-    p-4 overflow-auto
-    bg-slate-100 text-sm border-t
-    md:text-base lg:border-t-0 lg:bg-white
-    lg:sticky lg:top-10 lg:max-w-lg lg:h-full-minus-nav lg:mr-8 lg:pl-8 lg:border-l
-    lg:z-0"
+    overscroll-contain flex flex-col bg-slate-100 text-sm border-t
+    fixed top-1/2 bottom-0 left-0 right-0 flex-1
+    md:text-base
+    lg:relative lg:top-auto lg:flex-none
+    lg:border-t-0 lg:border-l lg:bg-slate-50"
+    :style="window.innerWidth >= 1024 && 'width:' + sidebarWidth + 'px'"
     x-show="showSidebar" x-transition.opacity x-cloak>
-  <div>
-    <div>
-      <button class="block text-2xl p-2" @click="showSidebar = false">&times;</button>
+  <div class="hidden lg:block absolute left-0 top-0 bottom-0 w-2 z-10 cursor-col-resize
+              hover:bg-blue-300 active:bg-blue-400 transition-colors"
+       @mousedown.prevent="startResizeSidebar()"></div>
+
+  <div class="flex items-center shrink-0 border-b bg-white lg:bg-slate-50 px-3 h-10">
+    <div class="flex items-center gap-1 text-sm min-w-0">
+      <template x-if="sidebarTab === null">
+        <span class="text-slate-500 font-medium">{{ _('Sidebar') }}</span>
+      </template>
+      <template x-if="sidebarTab !== null">
+        <div class="flex items-center gap-1 min-w-0">
+          <button class="text-slate-400 hover:text-slate-700 shrink-0" @click="sidebarTab = null">{{ _('Sidebar') }}</button>
+          <span class="text-slate-300 shrink-0">&rsaquo;</span>
+          <span class="text-slate-500 truncate"
+                x-text="({
+                  about: '{{ _('About this text') }}',
+                  analyze: '{{ _('Analyze') }}',
+                  contents: '{{ _('Table of contents') }}',
+                  lookup: '{{ _('Dictionary lookup') }}',
+                  resources: '{{ _('Resources') }}',
+                })[sidebarTab]"></span>
+        </div>
+      </template>
+    </div>
+    <button class="ml-auto text-xl leading-none text-slate-400 hover:text-slate-700 shrink-0"
+            @click="showSidebar = false">&times;</button>
+  </div>
+
+  <div class="flex-1 overflow-y-auto">
+
+    <div x-show="sidebarTab === null" class="py-2">
+      <ul>
+        <li>
+          <button class="flex items-center gap-3 w-full px-4 py-2.5 text-left hover:bg-slate-200 transition-colors"
+                  @click="sidebarTab = 'about'">
+            <svg class="shrink-0 text-slate-400" width="18" height="18"><use href="#info"></use></svg>
+            <span>{{ _('About this text') }}</span>
+          </button>
+        </li>
+        {% if not is_single_section_text %}
+        <li>
+          <button class="flex items-center gap-3 w-full px-4 py-2.5 text-left hover:bg-slate-200 transition-colors"
+                  @click="sidebarTab = 'contents'">
+            <svg class="shrink-0 text-slate-400" width="18" height="18"><use href="#list"></use></svg>
+            <span>{{ _('Table of contents') }}</span>
+          </button>
+        </li>
+        {% endif %}
+        {% if not has_no_parse %}
+        <li>
+          <button class="flex items-center gap-3 w-full px-4 py-2.5 text-left hover:bg-slate-200 transition-colors"
+                  @click="sidebarTab = 'analyze'">
+            <svg class="shrink-0 text-slate-400" width="18" height="18"><use href="#analyze"></use></svg>
+            <span>{{ _('Analyze') }}</span>
+          </button>
+        </li>
+        {% endif %}
+        <li>
+          <button class="flex items-center gap-3 w-full px-4 py-2.5 text-left hover:bg-slate-200 transition-colors"
+                  @click="sidebarTab = 'lookup'">
+            <svg class="shrink-0 text-slate-400" width="18" height="18"><use href="#search"></use></svg>
+            <span>{{ _('Dictionary lookup') }}</span>
+          </button>
+        </li>
+        <li>
+          <button class="flex items-center gap-3 w-full px-4 py-2.5 text-left hover:bg-slate-200 transition-colors"
+                  @click="sidebarTab = 'resources'">
+            <svg class="shrink-0 text-slate-400" width="18" height="18"><use href="#file"></use></svg>
+            <span>{{ _('Resources') }}</span>
+          </button>
+        </li>
+      </ul>
+    </div>
+
+    <div x-show="sidebarTab === 'about'" x-cloak class="p-4">
+      <h2 class="text-lg font-semibold text-slate-700 mb-1">{{ _('About this text') }}</h2>
+      <hr class="mb-4 border-slate-200">
+      {% if text_about %}
+      <table class="text-sm w-full">
+        <tbody>
+          {% if text.project %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Project') }}</td>
+            <td class="py-1.5">
+              <a class="text-blue-500 hover:underline" href="{{ url_for('proofing.project.summary', slug=text.project.slug) }}">{{ text.project.display_title }}</a>
+            </td>
+          </tr>
+          {% endif %}
+          {% if text_about.title %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Title') }}</td>
+            <td class="py-1.5">{{ text_about.title }}</td>
+          </tr>
+          {% endif %}
+          {% if text_about.author %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Author') }}</td>
+            <td class="py-1.5">{{ text_about.author }}</td>
+          </tr>
+          {% endif %}
+          {% if text_about.publisher %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Publisher') }}</td>
+            <td class="py-1.5">{{ text_about.publisher }}</td>
+          </tr>
+          {% endif %}
+          {% if text_about.editor %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Editor') }}</td>
+            <td class="py-1.5">{{ text_about.editor }}</td>
+          </tr>
+          {% endif %}
+          {% if text_about.publisher_place %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Location') }}</td>
+            <td class="py-1.5">{{ text_about.publisher_place }}</td>
+          </tr>
+          {% endif %}
+          {% if text_about.publication_year %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Year') }}</td>
+            <td class="py-1.5">{{ text_about.publication_year }}</td>
+          </tr>
+          {% endif %}
+          {% if text_about.source %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Source') }}</td>
+            <td class="py-1.5">{{ text_about.source }}</td>
+          </tr>
+          {% endif %}
+          {% if text_about.availability %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Availability') }}</td>
+            <td class="py-1.5">{{ text_about.availability | safe }}</td>
+          </tr>
+          {% endif %}
+        </tbody>
+      </table>
+      {% if text_about.credits %}
+      <div class="mt-4">
+        <h3 class="text-sm font-medium text-slate-600 mb-1">{{ _('Credits') }}</h3>
+        <ul class="text-sm space-y-1">
+          {% for role, names in text_about.credits %}
+          <li>
+            {% if role %}<span class="text-slate-500">{{ role }}</span> {% endif %}{{ names | join(', ') }}
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+      {% if text_about.notes %}
+      <div class="mt-4">
+        <h3 class="text-sm font-medium text-slate-600 mb-1">{{ _('Notes') }}</h3>
+        <div class="text-sm text-slate-600">{{ text_about.notes | safe }}</div>
+      </div>
+      {% endif %}
+      {% if text_about.revision_desc %}
+      <div class="mt-4">
+        <h3 class="text-sm font-medium text-slate-600 mb-1">{{ _('Revision History') }}</h3>
+        <div class="text-sm text-slate-600">{{ text_about.revision_desc | safe }}</div>
+      </div>
+      {% endif %}
+      {% endif %}
+      {% if raw_header %}
+      <details class="mt-6">
+        <summary class="text-sm text-slate-400 cursor-pointer select-none hover:text-slate-600">{{ _('Raw TEI header') }}</summary>
+        <pre class="mt-2 text-xs rounded bg-slate-800 text-white p-4 overflow-x-auto">{{ raw_header }}</pre>
+      </details>
+      {% endif %}
+      {% if not text_about and not raw_header %}
+      <p class="text-slate-400 text-sm">{{ _('No metadata available for this text.') }}</p>
+      {% endif %}
+    </div>
+
+    <div x-show="sidebarTab === 'contents'" x-cloak class="p-4">
+      <h2 class="text-lg font-semibold text-slate-700 mb-1">{{ _('Table of contents') }}</h2>
+      <hr class="mb-4 border-slate-200">
+      {% for prefix, sections in section_groups.items() %}
+        {%- set title = prefix_titles.get(prefix) if prefix_titles else None -%}
+        {%- set is_current_group = prefix == section.slug.rpartition('.')[0] -%}
+        {% if prefix %}
+        <details class="mb-1" {% if is_current_group %}open{% endif %}>
+          <summary class="font-bold text-sm cursor-pointer select-none py-1.5 px-2 rounded hover:bg-slate-200">
+            {% if title %}{{ title | hk_slug_to_user_script }}{% else %}{{ prefix }}{% endif %}
+          </summary>
+          <ul class="space-y-0.5 mb-2">
+          {% for (slug, name) in sections %}
+            {% set url = url_for('texts.section', text_slug=text.slug, section_slug=slug) %}
+            {% set is_current = (slug == section.slug) %}
+            <li>
+              <a class="block px-2 py-1 rounded text-sm {{ 'bg-blue-50 text-blue-700 font-medium' if is_current else 'hover:bg-slate-200' }}"
+                 :class="sectionSlug === '{{ slug }}' ? 'bg-blue-50 text-blue-700 font-medium' : 'hover:bg-slate-200'"
+                 href="{{ url }}"
+                 @click.prevent="navigateToTocEntry('{{ url }}')">
+                {{ name | hk_slug_to_user_script }}
+              </a>
+            </li>
+          {% endfor %}
+          </ul>
+        </details>
+        {% else %}
+        <ul class="space-y-0.5 mb-4">
+        {% for (slug, name) in sections %}
+          {% set url = url_for('texts.section', text_slug=text.slug, section_slug=slug) %}
+          {% set is_current = (slug == section.slug) %}
+          <li>
+            <a class="block px-2 py-1 rounded text-sm {{ 'bg-blue-50 text-blue-700 font-medium' if is_current else 'hover:bg-slate-200' }}"
+               :class="sectionSlug === '{{ slug }}' ? 'bg-blue-50 text-blue-700 font-medium' : 'hover:bg-slate-200'"
+               href="{{ url }}"
+               @click.prevent="navigateToTocEntry('{{ url }}')">
+              {{ name | hk_slug_to_user_script }}
+            </a>
+          </li>
+        {% endfor %}
+        </ul>
+        {% endif %}
+      {% endfor %}
+    </div>
+
+    <div x-show="sidebarTab === 'analyze'" x-cloak class="p-4">
+      <h2 class="text-lg font-semibold text-slate-700 mb-1">{{ _('Analyze') }}</h2>
+      <hr class="mb-4 border-slate-200">
+
+      <template x-if="analyzeData.error">
+        <div class="text-sm text-red-600" x-html="analyzeData.error"></div>
+      </template>
+
+      <template x-if="analyzeData.words.length > 0">
+        <table class="w-full">
+          <thead>
+            <tr class="border-b text-left text-slate-500 text-sm">
+              <th class="py-1.5 pr-3 font-medium">{{ _('Word') }}</th>
+              <th class="py-1.5 pr-3 font-medium">{{ _('Base') }}</th>
+              <th class="py-1.5 font-medium">{{ _('Parse') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="word in analyzeData.words">
+              <tr class="border-b border-slate-100 cursor-pointer hover:bg-slate-100 transition-colors"
+                  @click="lookupAnalyzeWord(word)">
+                <td class="py-1.5 pr-3" lang="sa" x-text="word.form"></td>
+                <td class="py-1.5 pr-3" lang="sa" x-text="word.lemma"></td>
+                <td class="py-1.5 text-slate-500 text-sm" lang="en" x-text="word.parse"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </template>
+
+      <template x-if="!analyzeData.error && analyzeData.words.length === 0">
+        <p class="text-slate-400 text-sm">{{ _('Click a verse to see its word-by-word analysis.') }}</p>
+      </template>
+    </div>
+
+    <div x-show="sidebarTab === 'lookup'" x-cloak class="p-4">
       <div id="parse--response" class="text-sm"></div>
 
       <div class="text-sm" x-show="wordAnalysis.form">
         <header>
-          <h1 class="text-xl" lang="sa" x-text="transliterateStr(wordAnalysis.form)"></h1>
+          <h1 class="text-xl" lang="sa" x-text="wordAnalysis.form"></h1>
           <p class="mb-8">
-            <span lang="sa" x-text="transliterateStr(wordAnalysis.lemma)"></span>
+            <span lang="sa" x-text="wordAnalysis.lemma"></span>
             <span x-text="wordAnalysis.parse"></span>
           </p>
         </header>
       </div>
 
       <form id="dict--form" class="mb-4" @submit.prevent="searchDictionary">
-
-        {# Dictionary input field (desktop only, to save space) #}
         <div class="mb-2 hidden lg:flex">
           <input name="q" type="text" placeholder="राम, ರಾಮ, ma, rAma, ..."
               class="p-2 flex-1 bg-slate-100 rounded-tl rounded-bl"
@@ -179,8 +463,45 @@ lg:top-10 is to vertically center the sidebar when sticky scrolling.
           </div>
         </div>
       </form>
+      <div x-html="dictionaryResponse"></div>
     </div>
-    <div x-html="transliterateHTML(dictionaryResponse)"></div>
+
+    <div x-show="sidebarTab === 'resources'" x-cloak class="p-4">
+      <h2 class="text-lg font-semibold text-slate-700 mb-1">{{ _('Resources') }}</h2>
+      <hr class="mb-4 border-slate-200">
+
+      {% if exports %}
+      <h3 class="font-medium text-sm text-slate-600 mb-2">{{ _('Downloads') }}</h3>
+      <ul class="space-y-1 mb-6">
+        {% for export in exports %}
+        {% set label = export.export_config.label if export.export_config else None %}
+        {% if label %}
+        <li>
+          <a class="flex items-center justify-between text-sm text-blue-500 hover:underline"
+             href="{{ url_for('texts.download_file', filename=export.slug) }}">
+            <span>{{ label }}</span>
+            <span class="text-slate-400 text-xs">{{ export.size|human_readable_bytes }}</span>
+          </a>
+        </li>
+        {% endif %}
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      {% set gretil = "https://github.com/ambuda-org/gretil" %}
+      {% set dcs = "https://github.com/ambuda-org/dcs" %}
+      {% set smith = "https://bombay.indology.info/" %}
+      <div class="text-sm text-slate-600 space-y-2">
+        <p>{{ _('Most of our texts are sourced from a custom snapshot of GRETIL, which you can find') }}
+          <a class="text-blue-500 hover:underline" href="{{ gretil }}">{{ _('here') }}</a>.
+          {{ _('Our') }} {{ 'rAmAyaNam'|d }} {{ _('and') }} {{ 'mahAbhAratam'|d }}
+          {{ _('texts are sourced from') }}
+          <a class="text-blue-500 hover:underline" href="{{ smith }}">{{ _("John Smith's website") }}</a>.</p>
+        <p>{{ _('Parse data comes from a custom snapshot of the Digital Corpus of Sanskrit, which you can find') }}
+          <a class="text-blue-500 hover:underline" href="{{ dcs }}">{{ _('here') }}</a>.</p>
+      </div>
+    </div>
+
   </div>
 </div>
 {% endmacro %}
@@ -188,9 +509,9 @@ lg:top-10 is to vertically center the sidebar when sticky scrolling.
 
 {# Title and section. For single-section texts, show just the title. #}
 {% if prev or next %}
-{% set page_title = text.title|devanagari + " " + section.title|devanagari%}
+{% set page_title = text.title|hk_to_user_script + " " + section.title|hk_to_user_script %}
 {% else %}
-{% set page_title = text.title|devanagari %}
+{% set page_title = text.title|hk_to_user_script %}
 {% endif %}
 {% block title %}{{ page_title }} | Ambuda{% endblock %}
 
@@ -199,17 +520,22 @@ lg:top-10 is to vertically center the sidebar when sticky scrolling.
 {# Serialize the data above so we can use it without a second network call. #}
 <script id="payload" type="application/json">{{ json_payload|safe }}</script>
 
-{# FIXME: unify <article> and these three <div>s into fewer elements. #}
-<article lang="sa" class="flex justify-around mb-32" x-data="reader" @click="onClick">
-  {# w-full to avoid ugly rendering for long text on mobile. #}
-  <div class="px-4 pb-16 w-full md:max-w-xl"
-      :class="getParseLayoutClasses">
+<article lang="sa" class="flex h-[calc(100vh-3rem)] mt-12" x-data="reader" @click="onClick" data-script="{{ session.get('script', 'Devanagari') }}">
+  <div class="flex-1 min-h-0 overflow-y-auto">
+  <div class="mx-auto px-4 pb-40 w-full"
+      :class="textWidth">
   <div :class="fontSize">
 
   {{ header() }}
   {{ i.i_edit() }}
   {{ i.i_bookmark() }}
   {{ i.i_link() }}
+  {{ i.i_settings() }}
+  {{ i.i_info() }}
+  {{ i.i_list() }}
+  {{ i.i_analyze() }}
+  {{ i.i_search() }}
+  {{ i.i_file() }}
 
   {# Server-side logic. This will be hidden once the application loads. #}
   <div x-show="!data.blocks.length">
@@ -231,7 +557,7 @@ lg:top-10 is to vertically center the sidebar when sticky scrolling.
         </div>
       </s-block>
       {% endfor %}
-    {% endif %}   
+    {% endif %}
 
     <s-block id="{{ block_.slug }}" data-slug="{{ block_.slug }}">
       <div class="flex items-start gap-2">
@@ -285,7 +611,7 @@ lg:top-10 is to vertically center the sidebar when sticky scrolling.
           <s-block :data-slug="parent_block.slug" class="parent-block">
             <div class="flex items-start gap-2 mb-4 pb-4">
               <div class="flex-1">
-                <div class="mula" x-html="transliterateHTML(parent_block.mula)"></div>
+                <div class="mula" x-html="parent_block.mula"></div>
               </div>
               <a x-show="parent_block.page_url"
                  :href="parent_block.page_url"
@@ -301,14 +627,8 @@ lg:top-10 is to vertically center the sidebar when sticky scrolling.
       {# Child blocks #}
       <s-block :data-slug="b.slug" :id="b.slug" class="group">
         <div class="flex items-start gap-2">
-          <div class="flex-1">
-            <div :class="getBlockClasses(b)">
-              <div x-show="showBlockMula(b)" :class="getMulaClasses" x-html="transliterateHTML(b.mula)"></div>
-              <div x-show="b.showParse" x-html="transliterateHTML(b.parse)"></div>
-            </div>
-            <span class="text-sm text-zinc-400 hover:underline" x-show="b.showParse">
-              <a @click.prevent="hideParse(b)" href="#" x-text="getParseLayoutTogglerText"></a>
-            </span>
+          <div class="flex-1 cursor-pointer">
+            <div x-html="b.mula"></div>
           </div>
           <div class="relative flex-shrink-0 mt-1 opacity-0 group-hover:opacity-100 transition-opacity" x-data="{ open: false }">
             <button @click="open = !open"
@@ -347,12 +667,14 @@ lg:top-10 is to vertically center the sidebar when sticky scrolling.
     </div>
   </template>
 
-  </div></div>
+  </div></div></div>
 
-  {{ footer() }}
+  {{ navbar() }}
   {{ sidebar() }}
+  {{ settings_modal() }}
 </article>
 {% endblock %}
 
+{% block header %}{% endblock %}
 {# Hide footer because we have a position:fixed nav "footer" already. #}
 {% block footer %}{% endblock %}

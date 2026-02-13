@@ -36,6 +36,7 @@ class InlineType(StrEnum):
     ADD = "add"
     ELLIPSIS = "ellipsis"
     QUOTE = "quote"
+    SYNC = "sync"
 
 
 class TEITag(StrEnum):
@@ -132,7 +133,12 @@ PROOFING_XML_VALIDATION_SPEC = {
     **{
         tag: ValidationSpec(children=set(InlineType), attrib=set())
         for tag in InlineType
+        if tag != InlineType.SYNC
     },
+    InlineType.SYNC: ValidationSpec(
+        children=set(InlineType),
+        attrib={"code"},
+    ),
 }
 
 # TODO:

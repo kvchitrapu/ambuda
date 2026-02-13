@@ -19,6 +19,7 @@ class Block:
 class Section:
     text_title: str
     section_title: str
+    section_slug: str
     #: The blocks for this section.
     blocks: list[Block]
     prev_url: str

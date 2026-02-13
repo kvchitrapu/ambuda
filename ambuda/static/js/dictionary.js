@@ -1,6 +1,4 @@
-import {
-  transliterateElement, transliterateHTMLString, $,
-} from './core.ts';
+import { $ } from './core.ts';
 import Routes from './routes';
 
 // The key to use when storing the dictionary config in local storage.
@@ -9,17 +7,9 @@ const DICTIONARY_CONFIG_KEY = 'dictionary';
 const HISTORY_SIZE = 10;
 
 export default () => ({
-  // The script to use for Sanskrit text.
-  script: 'devanagari',
   // The dictionary sources to use.
   sources: ['mw'],
-
-  // (transient data)
-
-  // Script value as stored on the <select> widget. We store this separately
-  // from `script` since we currently need to know both fields in order to
-  // transliterate.
-  uiScript: null,
+  userScript: 'Devanagari',
   // The current query.
   query: '',
   // The user's search history, from least to most recent.
@@ -28,10 +18,9 @@ export default () => ({
   showSourceSelector: false,
 
   init() {
-    // URL settings take priority.
     this.loadSettingsFromURL();
     this.loadSettings();
-    this.transliterate('devanagari', this.script);
+    this.userScript = this.$root.dataset.script || 'Devanagari';
   },
 
   /** Load source and query from the URL (if defined). */
@@ -46,9 +35,7 @@ export default () => ({
     if (settingsStr) {
       try {
         const settings = JSON.parse(settingsStr);
-        this.script = settings.script || this.script;
         this.sources = settings.sources || this.sources;
-        this.uiScript = this.script;
       } catch (error) {
         // Old settings are invalid -- rewrite with valid values.
         this.saveSettings();
@@ -57,23 +44,20 @@ export default () => ({
   },
 
   saveSettings() {
-    const settings = {
-      script: this.script,
-      sources: this.sources,
-    };
-    localStorage.setItem(DICTIONARY_CONFIG_KEY, JSON.stringify(settings));
+    localStorage.setItem(DICTIONARY_CONFIG_KEY, JSON.stringify({ sources: this.sources }));
   },
 
   async updateSource() {
     this.saveSettings();
-    // Return the promise so we can await it in tests.
     return this.searchDictionary(this.query);
   },
 
-  updateScript() {
-    this.transliterate(this.script, this.uiScript);
-    this.script = this.uiScript;
-    this.saveSettings();
+  async changeScript(newScript) {
+    await fetch(`/script/${newScript}`);
+    this.userScript = newScript;
+    if (this.query) {
+      await this.searchDictionary();
+    }
   },
 
   async searchDictionary() {
@@ -81,19 +65,17 @@ export default () => ({
       return;
     }
 
-    const url = Routes.ajaxDictionaryQuery(this.sources, this.query);
+    const baseUrl = Routes.ajaxDictionaryQuery(this.sources, this.query);
+    const url = `${baseUrl}?script=${this.userScript}`;
     const $container = $('#dict--response');
     const resp = await fetch(url);
 
     if (resp.ok) {
-      const text = await resp.text();
-      $container.innerHTML = transliterateHTMLString(text, this.script);
+      $container.innerHTML = await resp.text();
       // Update search history after the fetch so that the history widget
       // renders in sync with the main content.
       this.addToHistory(this.query);
-
-      const newURL = Routes.dictionaryQuery(this.sources, this.query);
-      window.history.replaceState({}, '', newURL);
+      window.history.replaceState({}, '', Routes.dictionaryQuery(this.sources, this.query));
     } else {
       $container.innerHTML = '<p>Sorry, this content is not available right now.</p>';
       this.addToHistory(this.query);
@@ -109,9 +91,7 @@ export default () => ({
 
   /** Add the given query to our current search history. */
   addToHistory(query) {
-    // If the query is already in the history, remove it.
     this.history = this.history.filter((x) => x !== query).concat(query);
-
     if (this.history.length > HISTORY_SIZE) {
       this.history.shift();
     }
@@ -136,9 +116,5 @@ export default () => ({
       this.searchDictionary();
       this.showSourceSelector = false;
     }
-  },
-
-  transliterate(oldScript, newScript) {
-    transliterateElement($('#dict--response'), oldScript, newScript);
   },
 });
