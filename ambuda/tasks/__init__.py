@@ -40,4 +40,6 @@ app.conf.update(
     task_always_eager=False,
     # Force arguments to be plain data by requiring them to be JSON-compatible.
     task_serializer="json",
+    # Set the default task timeout here. Other tasks can override it.
+    task_time_limit=600,
 )
