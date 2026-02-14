@@ -1,5 +1,6 @@
 """Background tasks for proofing projects."""
 
+import gc
 import logging
 import uuid
 import os
@@ -26,16 +27,26 @@ from ambuda.tasks import app
 from ambuda.tasks.utils import CeleryTaskStatus, TaskStatus, get_db_session
 
 
-def _save_page_image(pdf_page, output_path: Path, dpi: int = 200):
+def _save_page_image(pdf_path: Path, page_index: int, output_path: Path, dpi: int = 200):
     """Render a single PDF page to a JPG file.
 
-    :param pdf_page: a ``fitz.Page`` object.
+    Opens and closes the PDF document for each page to prevent PyMuPDF from
+    accumulating internal caches that cause memory to spike on large PDFs.
+
+    :param pdf_path: filesystem path to the source PDF.
+    :param page_index: zero-based page number to render.
     :param output_path: where to write the image.
     :param dpi: resolution for rendering.
     """
-    pix = pdf_page.get_pixmap(dpi=dpi)
+    doc = fitz.open(pdf_path)
+    page = doc.load_page(page_index)
+    pix = page.get_pixmap(dpi=dpi)
     pix.pil_save(str(output_path), optimize=True)
-    del pix
+    pix = None
+    page = None
+    doc.close()
+    del doc
+    gc.collect()
 
 
 def _split_pdf_into_pages(
@@ -48,18 +59,19 @@ def _split_pdf_into_pages(
     :return: a list of UUIDs for each page, in order.
     """
     doc = fitz.open(pdf_path)
-    task_status.progress(0, doc.page_count)
+    num_pages = doc.page_count
+    doc.close()
+
+    task_status.progress(0, num_pages)
     page_uuids = []
 
-    for page in doc:
-        n = page.number + 1
-        # Generate a unique UUID for this page
+    for n in range(num_pages):
         page_uuid = str(uuid.uuid4())
         page_uuids.append(page_uuid)
 
         output_path = output_dir / f"{page_uuid}.jpg"
-        _save_page_image(page, output_path)
-        task_status.progress(n, doc.page_count)
+        _save_page_image(pdf_path, n, output_path)
+        task_status.progress(n + 1, num_pages)
 
     return page_uuids
 
@@ -600,21 +612,23 @@ def regenerate_project_pages_inner(
             s3_pdf_path.download_file(str(pdf_path))
 
             doc = fitz.open(pdf_path)
-            if doc.page_count != len(pages):
+            num_pages = doc.page_count
+            doc.close()
+
+            if num_pages != len(pages):
                 logging.warning(
-                    f"PDF has {doc.page_count} pages but project has {len(pages)} "
-                    f"pages in the database; rendering min({doc.page_count}, {len(pages)})."
+                    f"PDF has {num_pages} pages but project has {len(pages)} "
+                    f"pages in the database; rendering min({num_pages}, {len(pages)})."
                 )
                 raise ValueError(
-                    f"PDF length and project length don't match ({doc.page_count} != {len(pages)})"
+                    f"PDF length and project length don't match ({num_pages} != {len(pages)})"
                 )
 
-            num_pages = doc.page_count
             task_status.progress(0, num_pages)
             for i in range(num_pages):
                 page_obj = pages[i]
                 image_path = temp_dir / f"{page_obj.uuid}.jpg"
-                _save_page_image(doc[i], image_path)
+                _save_page_image(pdf_path, i, image_path)
                 page_obj.s3_path(s3_bucket).upload_file(str(image_path))
                 image_path.unlink()
                 task_status.progress(i + 1, num_pages)
@@ -677,6 +691,8 @@ def replace_project_pdf_inner(
 
         doc = fitz.open(pdf_path)
         new_count = doc.page_count
+        doc.close()
+
         existing_count = len(existing_pages)
         total_work = new_count + 1
         task_status.progress(0, total_work)
@@ -688,7 +704,7 @@ def replace_project_pdf_inner(
             for i in range(min(new_count, existing_count)):
                 page_obj = existing_pages[i]
                 image_path = temp_dir / f"{page_obj.uuid}.jpg"
-                _save_page_image(doc[i], image_path)
+                _save_page_image(Path(pdf_path), i, image_path)
                 if s3_bucket:
                     page_obj.s3_path(s3_bucket).upload_file(str(image_path))
                 image_path.unlink()
@@ -722,7 +738,7 @@ def replace_project_pdf_inner(
                     session.flush()
 
                     image_path = temp_dir / f"{page_uuid}.jpg"
-                    _save_page_image(doc[i], image_path)
+                    _save_page_image(Path(pdf_path), i, image_path)
                     if s3_bucket:
                         new_page.s3_path(s3_bucket).upload_file(str(image_path))
                     image_path.unlink()
