@@ -13,6 +13,7 @@ from flask import (
     jsonify,
     make_response,
 )
+from flask_login import current_user
 from flask_wtf import FlaskForm
 from flask_wtf.file import FileField, FileRequired, MultipleFileField
 from sqlalchemy import inspect, select
@@ -636,7 +637,7 @@ def create_exports(model_name, selected_ids: list | None = None):
             text_id=text.id,
             app_environment=app_environment,
         )
-        export_chain.apply_async()
+        export_chain.apply_async(headers={"initiated_by": current_user.username})
         chain_count += 1
 
     flash(f"Started export for {chain_count} text(s).", "success")
@@ -656,9 +657,12 @@ def delete_exports(model_name, selected_ids: list | None = None):
         if not text_export:
             continue
 
-        delete_text_export.delay(
-            export_id=text_export.id,
-            app_environment=app_environment,
+        delete_text_export.apply_async(
+            kwargs=dict(
+                export_id=text_export.id,
+                app_environment=app_environment,
+            ),
+            headers={"initiated_by": current_user.username},
         )
         task_count += 1
 
@@ -672,7 +676,10 @@ def delete_exports(model_name, selected_ids: list | None = None):
 def save_xml_to_disk_cache(model_name, selected_ids: list | None = None):
     """Download all XML exports from S3 and save them to the local file cache."""
     app_environment = current_app.config["AMBUDA_ENVIRONMENT"]
-    populate_file_cache.delay(app_environment=app_environment)
+    populate_file_cache.apply_async(
+        kwargs=dict(app_environment=app_environment),
+        headers={"initiated_by": current_user.username},
+    )
     flash("Started saving XML files to disk cache.", "success")
     return redirect(url_for("admin.list_model", model_name=model_name))
 
@@ -692,9 +699,12 @@ def regenerate_pages(model_name, selected_ids: list | None = None):
         if not project:
             continue
 
-        regenerate_project_pages.delay(
-            project_slug=project.slug,
-            app_environment=app_environment,
+        regenerate_project_pages.apply_async(
+            kwargs=dict(
+                project_slug=project.slug,
+                app_environment=app_environment,
+            ),
+            headers={"initiated_by": current_user.username},
         )
         task_count += 1
 

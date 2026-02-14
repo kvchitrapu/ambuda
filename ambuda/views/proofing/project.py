@@ -53,6 +53,7 @@ from ambuda.utils.llm_prompts import PRESET_PROMPTS
 from ambuda.utils.project_structuring import ProofBlock, ProofPage, ProofProject
 from ambuda.utils.revisions import add_revision
 from ambuda.views.proofing.decorators import moderator_required, p2_required
+from ambuda.views.proofing.page import _get_image_url
 from ambuda.views.proofing.main import (
     _is_allowed_document_file,
     _required_if_url,
@@ -1056,6 +1057,7 @@ def reorder_pages(slug):
                 "uuid": page.uuid,
                 "order": page.order,
                 "preview": preview,
+                "image_url": _get_image_url(project_, page),
             }
         )
 
@@ -1083,9 +1085,12 @@ def admin(slug):
     form = DeleteProjectForm()
     if form.validate_on_submit():
         if form.slug.data == slug:
-            project_tasks.delete_project.delay(
-                project_slug=slug,
-                app_environment=current_app.config["AMBUDA_ENVIRONMENT"],
+            project_tasks.delete_project.apply_async(
+                kwargs=dict(
+                    project_slug=slug,
+                    app_environment=current_app.config["AMBUDA_ENVIRONMENT"],
+                ),
+                headers={"initiated_by": current_user.username},
             )
 
             flash(f"Deleted project {slug}")
@@ -1161,7 +1166,7 @@ def replace_pdf(slug):
             app_environment=app_env,
         )
 
-    task = pdf_task.apply_async()
+    task = pdf_task.apply_async(headers={"initiated_by": current_user.username})
 
     return render_template(
         "proofing/projects/replace-pdf-post.html",

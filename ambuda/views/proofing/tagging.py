@@ -276,7 +276,10 @@ def batch_tag(text_slug):
     app_env = current_app.config["AMBUDA_ENVIRONMENT"]
 
     try:
-        result = tagging_tasks.tag_text.delay(app_env, text_.slug)
+        result = tagging_tasks.tag_text.apply_async(
+            args=(app_env, text_.slug),
+            headers={"initiated_by": current_user.username},
+        )
         flash(f"Batch tagging started. Task ID: {result.id}", "success")
     except Exception as e:
         flash(f"Error starting batch tagging: {e}", "error")

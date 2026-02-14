@@ -78,6 +78,22 @@ class LocalTaskStatus(TaskStatus):
         logging.info(f"Failed. ({message})")
 
 
+def apply_async_as(task, args=None, kwargs=None, user=None, **options):
+    """Call task.apply_async with initiated_by header set to the user's username."""
+    headers = options.pop("headers", {}) or {}
+    if user:
+        headers["initiated_by"] = user.username
+    return task.apply_async(args=args, kwargs=kwargs, headers=headers, **options)
+
+
+def delay_as(task, user, *args, **kwargs):
+    """Convenience wrapper: task.delay(...) with initiated_by set."""
+    headers = {}
+    if user:
+        headers["initiated_by"] = user.username
+    return task.apply_async(args=args, kwargs=kwargs, headers=headers)
+
+
 @contextmanager
 def get_db_session(app_env: str, engine=None):
     """Get a database session for the given app environment.

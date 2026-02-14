@@ -9,6 +9,7 @@ import re
 import hashlib
 import shutil
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
@@ -627,13 +628,26 @@ def regenerate_project_pages_inner(
                 )
 
             task_status.progress(0, num_pages)
-            for i in range(num_pages):
-                page_obj = pages[i]
-                image_path = temp_dir / f"{page_obj.uuid}.jpg"
-                _save_page_image(pdf_path, i, image_path)
-                page_obj.s3_path(s3_bucket).upload_file(str(image_path))
-                image_path.unlink()
-                task_status.progress(i + 1, num_pages)
+
+            def _upload_and_cleanup(s3_path, local_path):
+                s3_path.upload_file(str(local_path))
+                local_path.unlink()
+
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                futures = []
+                for i in range(num_pages):
+                    page_obj = pages[i]
+                    image_path = temp_dir / f"{page_obj.uuid}.jpg"
+                    _save_page_image(pdf_path, i, image_path)
+                    fut = executor.submit(
+                        _upload_and_cleanup,
+                        page_obj.s3_path(s3_bucket),
+                        image_path,
+                    )
+                    futures.append(fut)
+                    task_status.progress(i + 1, num_pages)
+                for fut in as_completed(futures):
+                    fut.result()
 
             logging.info(
                 f"Regenerated {num_pages} page images for project {project_slug}."

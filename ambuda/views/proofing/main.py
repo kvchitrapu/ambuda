@@ -262,11 +262,14 @@ def create_project():
 
     if pdf_source == "url":
         pdf_url = form.pdf_url.data
-        task = project_tasks.create_project_from_url.delay(
-            pdf_url=pdf_url,
-            display_title=display_title,
-            creator_id=current_user.id,
-            app_environment=current_app.config["AMBUDA_ENVIRONMENT"],
+        task = project_tasks.create_project_from_url.apply_async(
+            kwargs=dict(
+                pdf_url=pdf_url,
+                display_title=display_title,
+                creator_id=current_user.id,
+                app_environment=current_app.config["AMBUDA_ENVIRONMENT"],
+            ),
+            headers={"initiated_by": current_user.username},
         )
     else:
         # We accept only PDFs, so validate that the user hasn't uploaded some
@@ -293,11 +296,14 @@ def create_project():
         pdf_path = upload_dir / f"{temp_id}.pdf"
         form.local_file.data.save(pdf_path)
 
-        task = project_tasks.create_project_from_local_pdf.delay(
-            pdf_path=str(pdf_path),
-            display_title=display_title,
-            creator_id=current_user.id,
-            app_environment=current_app.config["AMBUDA_ENVIRONMENT"],
+        task = project_tasks.create_project_from_local_pdf.apply_async(
+            kwargs=dict(
+                pdf_path=str(pdf_path),
+                display_title=display_title,
+                creator_id=current_user.id,
+                app_environment=current_app.config["AMBUDA_ENVIRONMENT"],
+            ),
+            headers={"initiated_by": current_user.username},
         )
     return render_template(
         "proofing/create-project-post.html",

@@ -40,6 +40,7 @@ from ambuda.tasks.text_exports import upload_xml_export
 from ambuda.utils import project_utils
 from ambuda.utils.text_exports import read_cached_xml
 from ambuda.views.proofing.decorators import p2_required
+from flask_login import current_user
 
 
 _SLUG_RE = re.compile(r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")
@@ -704,11 +705,14 @@ def create(project_slug, text_slug):
 
         session.commit()
 
-        upload_xml_export.delay(
-            text.id,
-            config.slug,
-            str(tei_path),
-            current_app.config["AMBUDA_ENVIRONMENT"],
+        upload_xml_export.apply_async(
+            args=(
+                text.id,
+                config.slug,
+                str(tei_path),
+                current_app.config["AMBUDA_ENVIRONMENT"],
+            ),
+            headers={"initiated_by": current_user.username},
         )
         task_dispatched = True
 

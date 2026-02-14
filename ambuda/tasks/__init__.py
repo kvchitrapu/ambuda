@@ -43,3 +43,5 @@ app.conf.update(
     # Set the default task timeout here. Other tasks can override it.
     task_time_limit=600,
 )
+
+import ambuda.tasks.signals  # noqa: F401 — register signal handlers

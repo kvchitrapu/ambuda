@@ -542,18 +542,23 @@ def check_access():
         if not current_user.is_moderator:
             abort(404)
         return
-    else:
-        model_name = request.view_args.get("model_name") if request.view_args else None
-        if not model_name:
-            abort(404)
 
-        config = get_model_config(model_name)
-        if not config:
+    if request.endpoint in ("admin.celery_tasks", "admin.celery_task_detail"):
+        if not current_user.is_admin:
             abort(404)
-        if config.permission == "admin" and not current_user.is_admin:
-            abort(404)
-        if config.permission == "moderator" and not current_user.is_moderator:
-            abort(404)
+        return
+
+    model_name = request.view_args.get("model_name") if request.view_args else None
+    if not model_name:
+        abort(404)
+
+    config = get_model_config(model_name)
+    if not config:
+        abort(404)
+    if config.permission == "admin" and not current_user.is_admin:
+        abort(404)
+    if config.permission == "moderator" and not current_user.is_moderator:
+        abort(404)
 
 
 @bp.route("/")
@@ -784,3 +789,50 @@ def run_task(model_name, task_slug):
 
     selected_ids = request.form.getlist("selected_ids")
     return task.handler(model_name=model_name, selected_ids=selected_ids)
+
+
+@bp.route("/celery-tasks")
+def celery_tasks():
+    """Browse Celery task execution logs."""
+    page = request.args.get("page", 1, type=int)
+    status_filter = request.args.get("status", "")
+    per_page = 50
+
+    session = q.get_session()
+    query = session.query(db.CeleryTaskLog).order_by(db.CeleryTaskLog.id.desc())
+
+    if status_filter:
+        query = query.filter(db.CeleryTaskLog.status == status_filter)
+
+    total = query.count()
+    items = query.limit(per_page).offset((page - 1) * per_page).all()
+    total_pages = (total + per_page - 1) // per_page
+
+    return render_template(
+        "admin/celery-tasks.html",
+        items=items,
+        page=page,
+        total=total,
+        total_pages=total_pages,
+        status_filter=status_filter,
+        models_by_category=get_models_by_category(),
+        model_configs={c.model.__name__: c for c in MODEL_CONFIG},
+        current_model=None,
+    )
+
+
+@bp.route("/celery-tasks/<int:task_log_id>")
+def celery_task_detail(task_log_id):
+    """View full details for a Celery task log entry."""
+    session = q.get_session()
+    item = session.get(db.CeleryTaskLog, task_log_id)
+    if not item:
+        abort(404)
+
+    return render_template(
+        "admin/celery-task-detail.html",
+        item=item,
+        models_by_category=get_models_by_category(),
+        model_configs={c.model.__name__: c for c in MODEL_CONFIG},
+        current_model=None,
+    )

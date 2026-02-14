@@ -123,11 +123,10 @@
 <script>
 function reorderPages() {
   const raw = {{ pages_data|tojson }};
-  const imageUrlTemplate = '{{ url_for("site.page_image", project_slug=project.slug, page_slug="__SLUG__") }}';
 
   return {
     textItems:  raw.map(p => ({ id: p.id, slug: p.slug, preview: p.preview })),
-    imageItems: raw.map(p => ({ id: p.id, slug: p.slug, uuid: p.uuid })),
+    imageItems: raw.map(p => ({ id: p.id, slug: p.slug, uuid: p.uuid, image_url: p.image_url })),
     locked: true,
     imagesDecoupled: false,
     textSelected: new Set(), imageSelected: new Set(),
@@ -157,7 +156,7 @@ function reorderPages() {
 
     openPreview(page) {
       this.previewSlug = page.slug;
-      this.previewUrl = imageUrlTemplate.replace('__SLUG__', page.slug);
+      this.previewUrl = page.image_url;
       this.previewOpen = true;
     },
 
