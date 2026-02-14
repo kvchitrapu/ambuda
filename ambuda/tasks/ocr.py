@@ -81,6 +81,112 @@ def run_ocr_for_page(
     )
 
 
+def _replace_ocr_bounding_boxes_for_page_inner(
+    app_env: str,
+    project_slug: str,
+    page_slug: str,
+):
+    """Re-run OCR for a single page and update only its bounding box data."""
+
+    with get_db_session(app_env) as (session, query, cfg):
+        logging.info(
+            f"Replacing OCR bounding boxes for page {project_slug}/{page_slug}"
+        )
+
+        project_ = query.project(project_slug)
+        if not project_:
+            raise ValueError(f"Unknown project {project_slug}")
+        page_ = query.page(project_.id, page_slug)
+        if not page_:
+            raise ValueError(f"Unknown page {project_slug}/{page_slug}")
+
+        ocr_response = google_ocr.run(page_, cfg.S3_BUCKET, cfg.CLOUDFRONT_BASE_URL)
+
+        page_.ocr_bounding_boxes = google_ocr.serialize_bounding_boxes(
+            ocr_response.bounding_boxes
+        )
+        session.add(page_)
+        session.commit()
+        logging.info(f"Updated bounding boxes for page {project_slug}/{page_slug}")
+
+
+@app.task(bind=True)
+def replace_ocr_bounding_boxes_for_page(
+    self,
+    *,
+    app_env: str,
+    project_slug: str,
+    page_slug: str,
+):
+    _replace_ocr_bounding_boxes_for_page_inner(
+        app_env,
+        project_slug,
+        page_slug,
+    )
+
+
+def replace_ocr_bounding_boxes(
+    app_env: str,
+    project: db.Project,
+) -> GroupResult | None:
+    """Create a `group` task to replace OCR bounding boxes for all pages.
+
+    This re-runs OCR on every page and updates only the bounding box data,
+    without creating new revisions or modifying page content.
+
+    :return: the Celery result, or ``None`` if no pages exist.
+    """
+    pages = list(project.pages)
+
+    if pages:
+        tasks = group(
+            replace_ocr_bounding_boxes_for_page.s(
+                app_env=app_env,
+                project_slug=project.slug,
+                page_slug=p.slug,
+            )
+            for p in pages
+        )
+        ret = tasks.apply_async()
+        ret.save()
+        return ret
+    else:
+        return None
+
+
+@app.task(bind=True)
+def replace_ocr_bounding_boxes_for_project(
+    self,
+    *,
+    app_env: str,
+    project_slug: str,
+):
+    """Celery task that replaces OCR bounding boxes for all pages in a project.
+
+    Loads the project from the database and dispatches per-page tasks as a group.
+    Can be chained after other tasks (e.g. PDF replacement).
+    """
+    with get_db_session(app_env) as (session, query, cfg):
+        project_ = query.project(project_slug)
+        if not project_:
+            raise ValueError(f"Unknown project {project_slug}")
+
+        pages = list(project_.pages)
+        if not pages:
+            return
+
+        tasks = group(
+            replace_ocr_bounding_boxes_for_page.s(
+                app_env=app_env,
+                project_slug=project_slug,
+                page_slug=p.slug,
+            )
+            for p in pages
+        )
+        ret = tasks.apply_async()
+        ret.save()
+
+
 def run_ocr_for_project(
     app_env: str,
     project: db.Project,

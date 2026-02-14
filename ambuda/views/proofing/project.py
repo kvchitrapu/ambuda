@@ -8,6 +8,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import sqlalchemy as sqla
+from celery import chain
 from celery.result import GroupResult
 from flask import (
     Blueprint,
@@ -1089,12 +1090,18 @@ def replace_pdf(slug):
 
     pdf_source = form.pdf_source.data
 
+    app_env = current_app.config["AMBUDA_ENVIRONMENT"]
+    bbox_task = ocr_tasks.replace_ocr_bounding_boxes_for_project.si(
+        app_env=app_env,
+        project_slug=slug,
+    )
+
     if pdf_source == "url":
         pdf_url = form.pdf_url.data
-        task = project_tasks.replace_project_pdf_from_url.delay(
+        pdf_task = project_tasks.replace_project_pdf_from_url.si(
             project_slug=slug,
             pdf_url=pdf_url,
-            app_environment=current_app.config["AMBUDA_ENVIRONMENT"],
+            app_environment=app_env,
         )
     else:
         filename = form.local_file.raw_data[0].filename
@@ -1125,11 +1132,14 @@ def replace_pdf(slug):
         pdf_path = upload_dir / f"{temp_id}.pdf"
         form.local_file.data.save(pdf_path)
 
-        task = project_tasks.replace_project_pdf.delay(
+        pdf_task = project_tasks.replace_project_pdf.si(
             project_slug=slug,
             pdf_path=str(pdf_path),
-            app_environment=current_app.config["AMBUDA_ENVIRONMENT"],
+            app_environment=app_env,
         )
+
+    # Chain: replace PDF first, then update bounding boxes.
+    task = chain(pdf_task, bbox_task).apply_async()
 
     return render_template(
         "proofing/projects/replace-pdf-post.html",
@@ -1139,4 +1149,38 @@ def replace_pdf(slug):
         total=0,
         percent=0,
         task_id=task.id,
+    )
+
+
+@bp.route("/<slug>/replace-ocr-bounding-boxes", methods=["GET", "POST"])
+@limiter.limit("3/hour", methods=["POST"])
+@p2_required
+def replace_ocr_bounding_boxes(slug):
+    """Re-run OCR to update bounding box data for all pages without creating new revisions."""
+    project_ = q.project(slug)
+    if project_ is None:
+        abort(404)
+
+    assert project_
+    if request.method == "POST":
+        task = ocr_tasks.replace_ocr_bounding_boxes(
+            app_env=current_app.config["AMBUDA_ENVIRONMENT"],
+            project=project_,
+        )
+        if task:
+            return render_template(
+                "proofing/projects/batch-ocr-post.html",
+                project=project_,
+                status="PENDING",
+                current=0,
+                total=0,
+                percent=0,
+                task_id=task.id,
+            )
+        else:
+            flash(_l("This project has no pages."))
+
+    return render_template(
+        "proofing/projects/replace-ocr-bounding-boxes.html",
+        project=project_,
     )

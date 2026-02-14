@@ -35,6 +35,7 @@ def _save_page_image(pdf_page, output_path: Path, dpi: int = 200):
     """
     pix = pdf_page.get_pixmap(dpi=dpi)
     pix.pil_save(str(output_path), optimize=True)
+    del pix
 
 
 def _split_pdf_into_pages(
@@ -273,9 +274,11 @@ def create_project_from_url_inner(
     temp_pdf_path = temp_dir / f"ambuda_pdf_{uuid.uuid4()}.pdf"
     try:
         logging.info(f"Downloading PDF from {pdf_url}...")
-        response = requests.get(pdf_url)
-        response.raise_for_status()
-        temp_pdf_path.write_bytes(response.content)
+        with requests.get(pdf_url, stream=True) as response:
+            response.raise_for_status()
+            with open(temp_pdf_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
 
         create_project_from_local_pdf_inner(
             pdf_path=str(temp_pdf_path),
@@ -760,9 +763,11 @@ def replace_project_pdf_from_url_inner(
     """Download a PDF from URL then delegate to `replace_project_pdf_inner`."""
     temp_pdf_path = Path(tempfile.gettempdir()) / f"ambuda_replace_{uuid.uuid4()}.pdf"
     try:
-        response = requests.get(pdf_url)
-        response.raise_for_status()
-        temp_pdf_path.write_bytes(response.content)
+        with requests.get(pdf_url, stream=True) as response:
+            response.raise_for_status()
+            with open(temp_pdf_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
 
         replace_project_pdf_inner(
             project_slug=project_slug,

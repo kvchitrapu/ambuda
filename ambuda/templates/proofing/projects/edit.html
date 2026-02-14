@@ -19,6 +19,7 @@
 {% set batch_llm_url = url_for("proofing.project.batch_llm", slug=project.slug)  %}
 {% set reorder_url = url_for("proofing.project.reorder_pages", slug=project.slug)  %}
 {% set replace_pdf_url = url_for("proofing.project.replace_pdf", slug=project.slug) %}
+{% set replace_bbox_url = url_for("proofing.project.replace_ocr_bounding_boxes", slug=project.slug) %}
 
 <div class="prose">
 
@@ -29,6 +30,7 @@
   <li><a href="{{ batch_llm_url }}">{{ _('Run batch LLM') }}</a></li>
   <li><a href="{{ reorder_url }}">{{ _('Reorder pages') }}</a></li>
   <li><a href="{{ replace_pdf_url }}">{{ _('Replace PDF') }}</a></li>
+  <li><a href="{{ replace_bbox_url }}">{{ _('Replace OCR bounding boxes') }}</a></li>
   {% endif %}
 </ul>
 
