@@ -9,7 +9,7 @@ from xml.etree import ElementTree as ET
 
 import sqlalchemy as sqla
 from celery import chain
-from celery.result import GroupResult
+
 from flask import (
     Blueprint,
     current_app,
@@ -520,11 +520,14 @@ def batch_ocr(slug):
 
     assert project_
     if request.method == "POST":
-        task = ocr_tasks.run_ocr_for_project(
-            app_env=current_app.config["AMBUDA_ENVIRONMENT"],
-            project=project_,
-        )
-        if task:
+        unedited = [p for p in project_.pages if p.version == 0]
+        if unedited:
+            task = ocr_tasks.run_ocr_for_project.apply_async(
+                kwargs=dict(
+                    app_env=current_app.config["AMBUDA_ENVIRONMENT"],
+                    project_slug=project_.slug,
+                ),
+            )
             return render_template(
                 "proofing/projects/batch-ocr-post.html",
                 project=project_,
@@ -545,40 +548,22 @@ def batch_ocr(slug):
 
 @bp.route("/batch-ocr-status/<task_id>")
 def batch_ocr_status(task_id):
-    r = GroupResult.restore(task_id, app=celery_app)
-    assert r, task_id
+    r = celery_app.AsyncResult(task_id)
 
-    if r.results:
-        current = r.completed_count()
-        total = len(r.results)
-        percent = current / total
-
-        status = None
-        if total:
-            if current == total:
-                status = "SUCCESS"
-            else:
-                status = "PROGRESS"
-        else:
-            status = "FAILURE"
-
-        data = {
-            "status": status,
-            "current": current,
-            "total": total,
-            "percent": percent,
-        }
+    info = r.info or {}
+    if isinstance(info, Exception):
+        current = total = percent = 0
     else:
-        data = {
-            "status": "PENDING",
-            "current": 0,
-            "total": 0,
-            "percent": 0,
-        }
+        current = info.get("current", 0)
+        total = info.get("total", 0)
+        percent = 100 * current / total if total else 0
 
     return render_template(
         "include/ocr-progress.html",
-        **data,
+        status=r.status,
+        current=current,
+        total=total,
+        percent=percent,
     )
 
 
@@ -810,11 +795,14 @@ def batch_llm_structuring(slug):
 
     assert project_
     if request.method == "POST":
-        task = llm_structuring_tasks.run_structuring_for_project(
-            app_env=current_app.config["AMBUDA_ENVIRONMENT"],
-            project=project_,
-        )
-        if task:
+        edited = [p for p in project_.pages if p.version > 0]
+        if edited:
+            task = llm_structuring_tasks.run_structuring_for_project.apply_async(
+                kwargs=dict(
+                    app_env=current_app.config["AMBUDA_ENVIRONMENT"],
+                    project_slug=project_.slug,
+                ),
+            )
             return render_template(
                 "proofing/projects/batch-llm-structuring-post.html",
                 project=project_,
@@ -835,40 +823,22 @@ def batch_llm_structuring(slug):
 
 @bp.route("/batch-llm-structuring-status/<task_id>")
 def batch_llm_structuring_status(task_id):
-    r = GroupResult.restore(task_id, app=celery_app)
-    assert r, task_id
+    r = celery_app.AsyncResult(task_id)
 
-    if r.results:
-        current = r.completed_count()
-        total = len(r.results)
-        percent = current / total
-
-        status = None
-        if total:
-            if current == total:
-                status = "SUCCESS"
-            else:
-                status = "PROGRESS"
-        else:
-            status = "FAILURE"
-
-        data = {
-            "status": status,
-            "current": current,
-            "total": total,
-            "percent": percent,
-        }
+    info = r.info or {}
+    if isinstance(info, Exception):
+        current = total = percent = 0
     else:
-        data = {
-            "status": "PENDING",
-            "current": 0,
-            "total": 0,
-            "percent": 0,
-        }
+        current = info.get("current", 0)
+        total = info.get("total", 0)
+        percent = 100 * current / total if total else 0
 
     return render_template(
-        "include/llm-structuring-progress.html",
-        **data,
+        "include/structuring-progress.html",
+        status=r.status,
+        current=current,
+        total=total,
+        percent=percent,
     )
 
 
@@ -1190,11 +1160,13 @@ def replace_ocr_bounding_boxes(slug):
 
     assert project_
     if request.method == "POST":
-        task = ocr_tasks.replace_ocr_bounding_boxes(
-            app_env=current_app.config["AMBUDA_ENVIRONMENT"],
-            project=project_,
-        )
-        if task:
+        if list(project_.pages):
+            task = ocr_tasks.replace_ocr_bounding_boxes_for_project.apply_async(
+                kwargs=dict(
+                    app_env=current_app.config["AMBUDA_ENVIRONMENT"],
+                    project_slug=project_.slug,
+                ),
+            )
             return render_template(
                 "proofing/projects/batch-ocr-post.html",
                 project=project_,

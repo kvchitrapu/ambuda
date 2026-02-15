@@ -1,15 +1,12 @@
 """Background tasks for proofing projects."""
 
 import logging
-
-from celery import group
-from celery.result import GroupResult
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ambuda import consts
-from ambuda import database as db
 from ambuda.enums import SitePageStatus
 from ambuda.tasks import app
-from ambuda.tasks.utils import get_db_session
+from ambuda.tasks.utils import CeleryTaskStatus, TaskStatus, get_db_session
 from ambuda.utils import google_ocr
 from ambuda.utils.revisions import add_revision
 
@@ -125,33 +122,125 @@ def replace_ocr_bounding_boxes_for_page(
     )
 
 
-def replace_ocr_bounding_boxes(
+def _run_ocr_threaded(
+    page_fn,
     app_env: str,
-    project: db.Project,
-) -> GroupResult | None:
-    """Create a `group` task to replace OCR bounding boxes for all pages.
+    project_slug: str,
+    page_slugs: list[str],
+    task_status: TaskStatus,
+    max_workers: int = 4,
+):
+    """Run a per-page OCR function concurrently using threads.
 
-    This re-runs OCR on every page and updates only the bounding box data,
-    without creating new revisions or modifying page content.
-
-    :return: the Celery result, or ``None`` if no pages exist.
+    :param page_fn: callable(app_env, project_slug, page_slug) to run per page.
+    :param app_env: the app environment.
+    :param project_slug: the project slug.
+    :param page_slugs: list of page slugs to process.
+    :param task_status: tracks progress on the task.
+    :param max_workers: max concurrent threads.
     """
-    pages = list(project.pages)
+    total = len(page_slugs)
+    completed = [0]
+    task_status.progress(0, total)
 
-    if pages:
-        tasks = group(
-            replace_ocr_bounding_boxes_for_page.s(
-                app_env=app_env,
-                project_slug=project.slug,
-                page_slug=p.slug,
-            )
-            for p in pages
-        )
-        ret = tasks.apply_async()
-        ret.save()
-        return ret
-    else:
-        return None
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_slug = {}
+        for slug in page_slugs:
+            fut = executor.submit(page_fn, app_env, project_slug, slug)
+            future_to_slug[fut] = slug
+
+        for fut in as_completed(future_to_slug):
+            slug = future_to_slug[fut]
+            try:
+                fut.result()
+            except Exception:
+                logging.exception(f"OCR failed for page {project_slug}/{slug}")
+            completed[0] += 1
+            task_status.progress(completed[0], total)
+
+    task_status.success(total, project_slug)
+
+
+def run_ocr_for_project_inner(
+    *,
+    app_env: str,
+    project_slug: str,
+    task_status: TaskStatus,
+):
+    """Run OCR on all unedited pages in a project using threads.
+
+    :param app_env: the app environment.
+    :param project_slug: the project slug.
+    :param task_status: tracks progress on the task.
+    """
+    with get_db_session(app_env) as (session, query, cfg):
+        project_ = query.project(project_slug)
+        if not project_:
+            raise ValueError(f"Unknown project {project_slug}")
+        page_slugs = [p.slug for p in project_.pages if p.version == 0]
+
+    if not page_slugs:
+        task_status.success(0, project_slug)
+        return
+
+    _run_ocr_threaded(
+        _run_ocr_for_page_inner,
+        app_env,
+        project_slug,
+        page_slugs,
+        task_status,
+    )
+
+
+@app.task(bind=True)
+def run_ocr_for_project(
+    self,
+    *,
+    app_env: str,
+    project_slug: str,
+):
+    """Run OCR on all unedited pages in a project.
+
+    Uses threads within a single Celery task instead of dispatching
+    one task per page, reducing worker memory pressure.
+    """
+    task_status = CeleryTaskStatus(self)
+    run_ocr_for_project_inner(
+        app_env=app_env,
+        project_slug=project_slug,
+        task_status=task_status,
+    )
+
+
+def replace_ocr_bounding_boxes_for_project_inner(
+    *,
+    app_env: str,
+    project_slug: str,
+    task_status: TaskStatus,
+):
+    """Replace OCR bounding boxes for all pages in a project using threads.
+
+    :param app_env: the app environment.
+    :param project_slug: the project slug.
+    :param task_status: tracks progress on the task.
+    """
+    with get_db_session(app_env) as (session, query, cfg):
+        project_ = query.project(project_slug)
+        if not project_:
+            raise ValueError(f"Unknown project {project_slug}")
+        page_slugs = [p.slug for p in project_.pages]
+
+    if not page_slugs:
+        task_status.success(0, project_slug)
+        return
+
+    _run_ocr_threaded(
+        _replace_ocr_bounding_boxes_for_page_inner,
+        app_env,
+        project_slug,
+        page_slugs,
+        task_status,
+    )
 
 
 @app.task(bind=True)
@@ -161,60 +250,14 @@ def replace_ocr_bounding_boxes_for_project(
     app_env: str,
     project_slug: str,
 ):
-    """Celery task that replaces OCR bounding boxes for all pages in a project.
+    """Replace OCR bounding boxes for all pages in a project.
 
-    Loads the project from the database and dispatches per-page tasks as a group.
-    Can be chained after other tasks (e.g. PDF replacement).
+    Uses threads within a single Celery task instead of dispatching
+    one task per page, reducing worker memory pressure.
     """
-    with get_db_session(app_env) as (session, query, cfg):
-        project_ = query.project(project_slug)
-        if not project_:
-            raise ValueError(f"Unknown project {project_slug}")
-
-        pages = list(project_.pages)
-        if not pages:
-            return
-
-        tasks = group(
-            replace_ocr_bounding_boxes_for_page.s(
-                app_env=app_env,
-                project_slug=project_slug,
-                page_slug=p.slug,
-            )
-            for p in pages
-        )
-        ret = tasks.apply_async()
-        ret.save()
-
-
-def run_ocr_for_project(
-    app_env: str,
-    project: db.Project,
-) -> GroupResult | None:
-    """Create a `group` task to run OCR on a project.
-
-    Usage:
-
-    >>> r = run_ocr_for_project(...)
-    >>> progress = r.completed_count() / len(r.results)
-
-    :return: the Celery result, or ``None`` if no tasks were run.
-    """
-    unedited_pages = [p for p in project.pages if p.version == 0]
-
-    if unedited_pages:
-        tasks = group(
-            run_ocr_for_page.s(
-                app_env=app_env,
-                project_slug=project.slug,
-                page_slug=p.slug,
-            )
-            for p in unedited_pages
-        )
-        ret = tasks.apply_async()
-        # Save the result so that we can poll for it later. If we don't do
-        # this, the result won't be available at all.
-        ret.save()
-        return ret
-    else:
-        return None
+    task_status = CeleryTaskStatus(self)
+    replace_ocr_bounding_boxes_for_project_inner(
+        app_env=app_env,
+        project_slug=project_slug,
+        task_status=task_status,
+    )

@@ -1,13 +1,12 @@
 """Background tasks for structuring proofing pages with LLMs."""
 
-from celery import group
-from celery.result import GroupResult
+import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ambuda import consts
 from ambuda import database as db
-from ambuda.enums import SitePageStatus
 from ambuda.tasks import app
-from ambuda.tasks.utils import get_db_session
+from ambuda.tasks.utils import CeleryTaskStatus, TaskStatus, get_db_session
 from ambuda.utils import llm_structuring
 from ambuda.utils.revisions import add_revision
 
@@ -79,26 +78,77 @@ def run_structuring_for_page(
     )
 
 
-def run_structuring_for_project(
+def run_structuring_for_project_inner(
+    *,
     app_env: str,
-    project: db.Project,
+    project_slug: str,
+    task_status: TaskStatus,
     prompt_template: str = llm_structuring.DEFAULT_STRUCTURING_PROMPT,
-) -> GroupResult | None:
-    # version == 0 means the page is brand new (= zero content).
-    edited_pages = [p for p in project.pages if p.version > 0]
+    max_workers: int = 4,
+):
+    """Run LLM structuring on all edited pages using threads.
 
-    if edited_pages:
-        tasks = group(
-            run_structuring_for_page.s(
-                app_env=app_env,
-                project_slug=project.slug,
-                page_slug=p.slug,
-                prompt_template=prompt_template,
+    :param app_env: the app environment.
+    :param project_slug: the project slug.
+    :param task_status: tracks progress on the task.
+    :param prompt_template: the prompt template for structuring.
+    :param max_workers: max concurrent threads.
+    """
+    with get_db_session(app_env) as (session, query, cfg):
+        project_ = query.project(project_slug)
+        if not project_:
+            raise ValueError(f"Unknown project {project_slug}")
+        page_slugs = [p.slug for p in project_.pages if p.version > 0]
+
+    if not page_slugs:
+        task_status.success(0, project_slug)
+        return
+
+    total = len(page_slugs)
+    completed = [0]
+    task_status.progress(0, total)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_slug = {}
+        for slug in page_slugs:
+            fut = executor.submit(
+                _run_structuring_for_page_inner,
+                app_env,
+                project_slug,
+                slug,
+                prompt_template,
             )
-            for p in edited_pages
-        )
-        ret = tasks.apply_async()
-        ret.save()
-        return ret
-    else:
-        return None
+            future_to_slug[fut] = slug
+
+        for fut in as_completed(future_to_slug):
+            slug = future_to_slug[fut]
+            try:
+                fut.result()
+            except Exception:
+                logging.exception(f"Structuring failed for page {project_slug}/{slug}")
+            completed[0] += 1
+            task_status.progress(completed[0], total)
+
+    task_status.success(total, project_slug)
+
+
+@app.task(bind=True)
+def run_structuring_for_project(
+    self,
+    *,
+    app_env: str,
+    project_slug: str,
+    prompt_template: str = llm_structuring.DEFAULT_STRUCTURING_PROMPT,
+):
+    """Run LLM structuring on all edited pages in a project.
+
+    Uses threads within a single Celery task instead of dispatching
+    one task per page, reducing worker memory pressure.
+    """
+    task_status = CeleryTaskStatus(self)
+    run_structuring_for_project_inner(
+        app_env=app_env,
+        project_slug=project_slug,
+        task_status=task_status,
+        prompt_template=prompt_template,
+    )
