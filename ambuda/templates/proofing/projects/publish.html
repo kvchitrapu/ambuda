@@ -40,12 +40,26 @@
           <button type="button" @click="addPublishEntry()" class="btn btn-basic text-sm">+ Add config</button>
         </div>
 
+        <div x-ref="configList"
+             @dragover.prevent="onDragOver($event)"
+             @dragleave="onDragLeave($event)"
+             @drop.prevent="onDrop($event)"
+             @dragend="onDragEnd()">
         <template x-for="(entry, index) in config.publish" :key="index">
-          <div class="border border-slate-300 rounded mb-2 bg-white">
+          <div class="border rounded mb-2 bg-white"
+               :class="dropTarget === index ? 'border-blue-400 bg-blue-50' : 'border-slate-300'"
+               :data-index="index"
+               draggable="true"
+               @dragstart="onDragStart(index, $event)">
             {# Collapsed header #}
             <div class="flex justify-between items-center px-3 py-2 cursor-pointer select-none"
                  @click="entry._expanded = !entry._expanded">
               <div class="flex items-center gap-2">
+                <svg class="w-4 h-4 shrink-0 text-slate-400" fill="currentColor" viewBox="0 0 24 24">
+                  <circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/>
+                  <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
+                  <circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/>
+                </svg>
                 <svg :class="entry._expanded ? 'rotate-90' : ''" class="w-3.5 h-3.5 shrink-0 text-slate-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/>
                 </svg>
@@ -199,9 +213,15 @@
                     </template>
 
                     <template x-if="field.type === 'string' && !field.enum && !['author', 'genre'].includes(field.name) && field.name !== 'language'">
-                      <input type="text" x-model="entry[field.name]"
-                             :required="field.required" :placeholder="field.placeholder"
-                             class="w-full border border-slate-300 rounded px-3 py-2 text-sm">
+                      <div>
+                        <input type="text" x-model="entry[field.name]"
+                               :required="field.required" :placeholder="field.placeholder"
+                               @input="field.name === 'title' ? onTitleInput(entry) : (field.name === 'slug' ? onSlugInput(entry) : null)"
+                               class="w-full border border-slate-300 rounded px-3 py-2 text-sm"
+                               :class="field.name === 'slug' && isDuplicateSlug(entry) ? 'border-red-400' : ''">
+                        <p x-show="field.name === 'slug' && isDuplicateSlug(entry)"
+                           class="text-xs text-red-600 mt-1">This slug is already used by another config in this project.</p>
+                      </div>
                     </template>
 
                     <template x-if="field.type === 'string' && field.enum && field.name !== 'language'">
@@ -232,6 +252,7 @@
             </div>
           </div>
         </template>
+        </div>
 
         <div x-show="config.publish.length === 0" class="text-center py-8 text-slate-500">
           No publish configurations yet. Click "Add Configuration" to create one.

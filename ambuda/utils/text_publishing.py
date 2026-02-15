@@ -581,7 +581,9 @@ def _create_tei_sections_and_blocks(
 
         # Page number
         try:
-            print_page_number = page_numbers[block.image_number]
+            # Subtract 1 because image_number is 1-indexed.
+            assert 1 <= block.image_number <= len(page_numbers)
+            print_page_number = page_numbers[block.image_number - 1]
         except IndexError:
             print_page_number = DEFAULT_PRINT_PAGE_NUMBER
 
@@ -593,6 +595,7 @@ def _create_tei_sections_and_blocks(
             _concatenate_tei_xml_blocks_across_page_boundary(
                 merge_next, tei_xml, print_page_number
             )
+            tei_xml = merge_next
             merge_next = None
         else:
             if tei_xml.tag == "note":

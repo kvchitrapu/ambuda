@@ -9,6 +9,29 @@ function toHK(str) {
   return Sanscript.t(str, 'devanagari', 'hk');
 }
 
+const DIACRITICS = {
+  ś: 'sh', Ś: 'Sh', ṣ: 'sh', Ṣ: 'Sh',
+  ā: 'a', Ā: 'A', ī: 'i', Ī: 'I', ū: 'u', Ū: 'U',
+  ṛ: 'r', Ṛ: 'R', ṝ: 'r', Ṝ: 'R',
+  ñ: 'n', Ñ: 'N', ṅ: 'n', Ṅ: 'N', ṇ: 'n', Ṇ: 'N',
+  ṃ: 'm', Ṃ: 'M', ḥ: 'h', Ḥ: 'H',
+  ṭ: 't', Ṭ: 'T', ḍ: 'd', Ḍ: 'D', ḷ: 'l', Ḷ: 'L',
+};
+
+const DIACRITICS_RE = new RegExp(`[${Object.keys(DIACRITICS).join('')}]`, 'g');
+
+export function titleToSlug(str) {
+  if (!str) return '';
+  let s = toHK(str) || str;
+  // HK uses z for ś and S for ṣ — replace before lowercasing
+  s = s.replace(/z/g, 'sh').replace(/S/g, 'sh');
+  s = s.toLowerCase();
+  s = s.replace(DIACRITICS_RE, (ch) => DIACRITICS[ch] || ch);
+  s = s.replace(/[^a-z0-9]+/g, '-');
+  s = s.replace(/^-+|-+$/g, '');
+  return s;
+}
+
 function createPicker(field, component, {
   getItems, displayValue, match, onSelect,
 }) {
@@ -75,6 +98,8 @@ export default () => ({
   newGenreName: '',
   allLanguages: null,
   pickers: {},
+  dragIndex: null,
+  dropTarget: null,
 
   init() {
     this.pickers = {
@@ -185,6 +210,70 @@ export default () => ({
     this.newGenreOpen = false;
   },
 
+  // -- Drag-and-drop reordering --
+
+  onDragStart(index, event) {
+    this.dragIndex = index;
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', index);
+  },
+
+  onDragOver(event) {
+    const row = event.target.closest('[data-index]');
+    if (!row || this.dragIndex === null) return;
+    const index = parseInt(row.dataset.index, 10);
+    if (this.dragIndex === index) {
+      this.dropTarget = null;
+      return;
+    }
+    this.dropTarget = index;
+    event.dataTransfer.dropEffect = 'move';
+  },
+
+  onDragLeave(event) {
+    const list = this.$refs.configList;
+    if (list && !list.contains(event.relatedTarget)) this.dropTarget = null;
+  },
+
+  onDrop(event) {
+    const row = event.target.closest('[data-index]');
+    if (!row || this.dragIndex === null) return;
+    const index = parseInt(row.dataset.index, 10);
+    if (this.dragIndex === index) return;
+    const [moved] = this.config.publish.splice(this.dragIndex, 1);
+    const insertAt = index > this.dragIndex ? index - 1 : index;
+    this.config.publish.splice(insertAt, 0, moved);
+    this.dragIndex = null;
+    this.dropTarget = null;
+  },
+
+  onDragEnd() {
+    this.dragIndex = null;
+    this.dropTarget = null;
+  },
+
+  // -- Auto-slug --
+
+  onTitleInput(entry) {
+    if (entry._slugManual) return;
+    entry.slug = titleToSlug(entry.title);
+  },
+
+  onSlugInput(entry) {
+    entry._slugManual = true;
+  },
+
+  // -- Slug validation --
+
+  isDuplicateSlug(entry) {
+    if (!entry.slug) return false;
+    return this.config.publish.some((other) => other !== entry && other.slug === entry.slug);
+  },
+
+  hasDuplicateSlugs() {
+    return this.config.publish.some((entry) => this.isDuplicateSlug(entry));
+  },
+
   // -- Utilities --
 
   titleCase(str) {
@@ -249,6 +338,10 @@ export default () => ({
   },
 
   submitForm(event) {
+    if (this.hasDuplicateSlugs()) {
+      alert('Please fix duplicate slugs before saving.');
+      return;
+    }
     this.$refs.hiddenConfig.value = this.generateJSON();
     event.target.submit();
   },

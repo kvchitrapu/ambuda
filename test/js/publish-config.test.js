@@ -1,4 +1,4 @@
-import createPublishConfig from '@/publish-config';
+import createPublishConfig, { titleToSlug } from '@/publish-config';
 
 function setup(overrides = {}) {
   window.PUBLISH_CONFIG = overrides.config || { publish: [], pages: [] };
@@ -277,4 +277,130 @@ test('picker keydown Escape closes', () => {
   const event = { key: 'Escape', preventDefault: jest.fn() };
   c.pickers.lang.keydown(entry, event);
   expect(entry._lang_open).toBe(false);
+});
+
+// -- titleToSlug tests --
+
+// Sanscript is a browser global, so we mock it for Devanagari tests
+function withSanscript(map, fn) {
+  global.Sanscript = { t: (str, from, to) => map[str] || str };
+  try { fn(); } finally { delete global.Sanscript; }
+}
+
+test('titleToSlug: pure Devanagari title', () => {
+  withSanscript({ 'रामायणम्': 'rAmAyaNam' }, () => {
+    expect(titleToSlug('रामायणम्')).toBe('ramayanam');
+  });
+});
+
+test('titleToSlug: handles ś/ṣ → sh', () => {
+  withSanscript({ 'विष्णुपुराणम्': 'viSNupurANam' }, () => {
+    expect(titleToSlug('विष्णुपुराणम्')).toBe('vishnupuranam');
+  });
+});
+
+test('titleToSlug: mixed Devanagari with spaces → hyphens', () => {
+  withSanscript({ 'राम चरित': 'rAma carita' }, () => {
+    expect(titleToSlug('राम चरित')).toBe('rama-carita');
+  });
+});
+
+test('titleToSlug: already-Latin input passes through', () => {
+  expect(titleToSlug('ramayana')).toBe('ramayana');
+});
+
+test('titleToSlug: Latin with diacritics normalized', () => {
+  expect(titleToSlug('Rāmāyaṇa')).toBe('ramayana');
+});
+
+test('titleToSlug: empty string → empty string', () => {
+  expect(titleToSlug('')).toBe('');
+});
+
+test('titleToSlug: leading/trailing special chars trimmed', () => {
+  expect(titleToSlug('--hello--')).toBe('hello');
+});
+
+test('titleToSlug: consecutive hyphens collapsed', () => {
+  expect(titleToSlug('foo   bar')).toBe('foo-bar');
+});
+
+// -- isDuplicateSlug tests --
+
+test('isDuplicateSlug: no duplicate returns false', () => {
+  const c = setup({
+    config: { publish: [{ slug: 'a', title: 'A' }, { slug: 'b', title: 'B' }], pages: [] },
+  });
+  expect(c.isDuplicateSlug(c.config.publish[0])).toBe(false);
+});
+
+test('isDuplicateSlug: same slug on another entry returns true', () => {
+  const c = setup({
+    config: { publish: [{ slug: 'a', title: 'A' }, { slug: 'a', title: 'B' }], pages: [] },
+  });
+  expect(c.isDuplicateSlug(c.config.publish[0])).toBe(true);
+  expect(c.isDuplicateSlug(c.config.publish[1])).toBe(true);
+});
+
+test('isDuplicateSlug: own slug does not flag itself', () => {
+  const c = setup({
+    config: { publish: [{ slug: 'unique', title: 'Only' }], pages: [] },
+  });
+  expect(c.isDuplicateSlug(c.config.publish[0])).toBe(false);
+});
+
+test('isDuplicateSlug: empty slug is not a duplicate', () => {
+  const c = setup({
+    config: { publish: [{ slug: '', title: 'A' }, { slug: '', title: 'B' }], pages: [] },
+  });
+  expect(c.isDuplicateSlug(c.config.publish[0])).toBe(false);
+});
+
+// -- Drag-and-drop reorder tests --
+
+function mockDropEvent(index) {
+  const el = { dataset: { index: String(index) }, closest: (sel) => (sel === '[data-index]' ? el : null) };
+  return { target: el };
+}
+
+test('onDrop reorders entries forward', () => {
+  const c = setup({
+    config: { publish: [{ slug: 'a', title: 'A' }, { slug: 'b', title: 'B' }, { slug: 'c', title: 'C' }], pages: [] },
+  });
+  c.dragIndex = 0;
+  c.onDrop(mockDropEvent(2));
+  expect(c.config.publish.map(e => e.slug)).toEqual(['b', 'a', 'c']);
+});
+
+test('onDrop reorders entries backward', () => {
+  const c = setup({
+    config: { publish: [{ slug: 'a', title: 'A' }, { slug: 'b', title: 'B' }, { slug: 'c', title: 'C' }], pages: [] },
+  });
+  c.dragIndex = 2;
+  c.onDrop(mockDropEvent(0));
+  expect(c.config.publish.map(e => e.slug)).toEqual(['c', 'a', 'b']);
+});
+
+// -- Auto-slug tests --
+
+test('onTitleInput auto-populates slug when not manually edited', () => {
+  const c = setup();
+  c.addPublishEntry();
+  const entry = c.config.publish[0];
+  entry.title = 'Rāmāyaṇa';
+  c.onTitleInput(entry);
+  expect(entry.slug).toBe('ramayana');
+});
+
+test('onTitleInput stops auto-populating after manual slug edit', () => {
+  const c = setup();
+  c.addPublishEntry();
+  const entry = c.config.publish[0];
+  entry.title = 'Foo';
+  c.onTitleInput(entry);
+  expect(entry.slug).toBe('foo');
+  c.onSlugInput(entry);
+  entry.title = 'Bar';
+  c.onTitleInput(entry);
+  expect(entry.slug).toBe('foo');
 });
