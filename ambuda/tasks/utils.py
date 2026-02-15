@@ -25,7 +25,7 @@ class TaskStatus:
         """
         raise NotImplementedError
 
-    def success(self, num_pages: int, slug: str):
+    def success(self, num_pages: int, slug: str, **extra):
         """Mark the task as a success.
 
         # FIXME(arun): make this API more generic.
@@ -55,12 +55,11 @@ class CeleryTaskStatus(TaskStatus):
         meta.update(extra)
         self.task.update_state(state="PROGRESS", meta=meta)
 
-    def success(self, num_pages: int, slug: str):
+    def success(self, num_pages: int, slug: str, **extra):
         """Mark the task as a success."""
-        self.task.update_state(
-            state=states.SUCCESS,
-            meta={"current": num_pages, "total": num_pages, "slug": slug},
-        )
+        meta = {"current": num_pages, "total": num_pages, "slug": slug}
+        meta.update(extra)
+        self.task.update_state(state=states.SUCCESS, meta=meta)
 
     def failure(self, message: str):
         """Mark the task as failed."""
@@ -77,8 +76,10 @@ class LocalTaskStatus(TaskStatus):
                 f"  uploads: {extra['upload_current']} / {extra.get('upload_total', '?')}"
             )
 
-    def success(self, num_pages: int, slug: str):
+    def success(self, num_pages: int, slug: str, **extra):
         logging.info(f"Succeeded. Project is at {slug}.")
+        if extra.get("failed_pages"):
+            logging.warning(f"  failed pages: {extra['failed_pages']}")
 
     def failure(self, message: str):
         logging.info(f"Failed. ({message})")

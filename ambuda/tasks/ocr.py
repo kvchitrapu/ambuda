@@ -141,7 +141,8 @@ def _run_ocr_threaded(
     """
     total = len(page_slugs)
     completed = [0]
-    task_status.progress(0, total)
+    failed_pages = []
+    task_status.progress(0, total, failed_pages=[])
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         future_to_slug = {}
@@ -155,10 +156,11 @@ def _run_ocr_threaded(
                 fut.result()
             except Exception:
                 logging.exception(f"OCR failed for page {project_slug}/{slug}")
+                failed_pages.append(slug)
             completed[0] += 1
-            task_status.progress(completed[0], total)
+            task_status.progress(completed[0], total, failed_pages=failed_pages)
 
-    task_status.success(total, project_slug)
+    task_status.success(total, project_slug, failed_pages=failed_pages)
 
 
 def run_ocr_for_project_inner(

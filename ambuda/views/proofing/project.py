@@ -553,10 +553,12 @@ def batch_ocr_status(task_id):
     info = r.info or {}
     if isinstance(info, Exception):
         current = total = percent = 0
+        failed_pages = []
     else:
         current = info.get("current", 0)
         total = info.get("total", 0)
         percent = 100 * current / total if total else 0
+        failed_pages = info.get("failed_pages", [])
 
     return render_template(
         "include/ocr-progress.html",
@@ -564,6 +566,7 @@ def batch_ocr_status(task_id):
         current=current,
         total=total,
         percent=percent,
+        failed_pages=failed_pages,
     )
 
 
@@ -828,10 +831,12 @@ def batch_llm_structuring_status(task_id):
     info = r.info or {}
     if isinstance(info, Exception):
         current = total = percent = 0
+        failed_pages = []
     else:
         current = info.get("current", 0)
         total = info.get("total", 0)
         percent = 100 * current / total if total else 0
+        failed_pages = info.get("failed_pages", [])
 
     return render_template(
         "include/structuring-progress.html",
@@ -839,6 +844,7 @@ def batch_llm_structuring_status(task_id):
         current=current,
         total=total,
         percent=percent,
+        failed_pages=failed_pages,
     )
 
 

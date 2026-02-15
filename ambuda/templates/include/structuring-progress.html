@@ -6,7 +6,16 @@
 </div>
 {% endmacro %}
 
-{# kwargs: current, total, percent #}
+{% macro failed_pages_list(failed_pages) %}
+{% if failed_pages %}
+  {% call components.div_warning() %}
+  <p class="!mb-0">{{ failed_pages | length }} page(s) failed:
+    {{ failed_pages | join(', ') }}</p>
+  {% endcall %}
+{% endif %}
+{% endmacro %}
+
+{# kwargs: current, total, percent, failed_pages #}
 {% if status == 'FAILURE' %}
   {% call components.div_warning() %}
   <p class="!mb-0">We weren't able to complete structuring on this project. If you
@@ -17,10 +26,12 @@
 {% elif status == 'PROGRESS' %}
   {{ progress_bar(percent) }}
   <p>Processed {{ current }} of {{ total }} edited pages.</p>
+  {{ failed_pages_list(failed_pages) }}
 
 {% elif status == 'SUCCESS' %}
   {{ progress_bar(100) }}
   <p>Done. (Processed {{ current }} of {{ total }} edited pages.)</p>
+  {{ failed_pages_list(failed_pages) }}
 
 {% else %}
   {{ progress_bar(0) }}

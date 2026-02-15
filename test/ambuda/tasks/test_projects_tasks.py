@@ -1,4 +1,6 @@
 import tempfile
+from pathlib import Path
+from unittest.mock import patch
 
 import fitz
 
@@ -8,7 +10,7 @@ import ambuda.tasks.utils
 
 
 def _create_sample_pdf(output_path: str, num_pages: int):
-    """Create a toy PDF with 10 pages."""
+    """Create a toy PDF with the given number of pages."""
     doc = fitz.open()
     for i in range(1, num_pages + 1):
         page = doc.new_page()
@@ -17,6 +19,12 @@ def _create_sample_pdf(output_path: str, num_pages: int):
     doc.save(output_path)
 
 
+def _fake_save_page_image(pdf_path, page_index, output_path, dpi=200):
+    """Write a tiny placeholder file instead of rendering a real page image."""
+    Path(output_path).write_bytes(b"\xff\xd8\xff\xe0")
+
+
+@patch.object(projects, "_save_page_image", _fake_save_page_image)
 def test_create_project_inner(flask_app, s3_mocks):
     with flask_app.app_context():
         from ambuda.queries import get_engine
@@ -62,6 +70,7 @@ def _create_project_for_replace(flask_app, slug, num_pages):
     return q.project(slug), engine
 
 
+@patch.object(projects, "_save_page_image", _fake_save_page_image)
 def test_replace_project_pdf_inner(flask_app, s3_mocks):
     with flask_app.app_context():
         project, engine = _create_project_for_replace(flask_app, "replace-longer", 5)
@@ -86,6 +95,7 @@ def test_replace_project_pdf_inner(flask_app, s3_mocks):
             assert project.pages[i].uuid == original_uuids[i]
 
 
+@patch.object(projects, "_save_page_image", _fake_save_page_image)
 def test_replace_project_pdf_inner__shorter(flask_app, s3_mocks):
     with flask_app.app_context():
         project, engine = _create_project_for_replace(flask_app, "replace-shorter", 5)

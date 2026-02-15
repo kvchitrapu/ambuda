@@ -211,6 +211,12 @@ def flask_app():
     app.config.update({"TESTING": True})
     app.test_client_class = FlaskLoginClient
 
+    # Prevent tasks from being sent to a real Redis broker during tests.
+    # task_eager_propagates ensures exceptions in tasks surface as test failures.
+    from ambuda.tasks import app as celery_app
+
+    celery_app.conf.update(task_always_eager=True, task_eager_propagates=True)
+
     with app.app_context():
         initialize_test_db()
 

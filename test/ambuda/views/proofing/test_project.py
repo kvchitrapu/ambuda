@@ -1,4 +1,5 @@
 import json
+from unittest.mock import patch
 
 import ambuda.queries as q
 from ambuda.database import Page, Project
@@ -116,14 +117,16 @@ def test_admin(moderator_client):
     session.add(project)
     session.commit()
 
-    resp = moderator_client.post(
-        "/proofing/project-123/admin",
-        data={
-            "slug": "project-123",
-        },
-    )
-    # Redirect (to project index page) indicates success.
-    assert resp.status_code == 302
+    with patch("ambuda.tasks.projects.delete_project.apply_async") as mock_task:
+        resp = moderator_client.post(
+            "/proofing/project-123/admin",
+            data={
+                "slug": "project-123",
+            },
+        )
+        # Redirect (to project index page) indicates success.
+        assert resp.status_code == 302
+        mock_task.assert_called_once()
 
 
 def test_admin__slug_mismatch(moderator_client):

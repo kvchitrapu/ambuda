@@ -2,43 +2,36 @@
 
 import pytest
 
-import config
-from ambuda import create_app
-from test.ambuda.conftest import initialize_test_db
+from ambuda.rate_limit import limiter
 
 
-@pytest.fixture()
-def rate_limited_app(s3_mocks, monkeypatch):
-    monkeypatch.setattr(config.UnitTestConfig, "RATELIMIT_ENABLED", True)
-    monkeypatch.setattr(config.UnitTestConfig, "RATELIMIT_STORAGE_URI", "memory://")
-
-    app = create_app("testing")
-    with app.app_context():
-        initialize_test_db()
-        yield app
-
-
-@pytest.fixture()
-def rate_limited_client(rate_limited_app):
-    return rate_limited_app.test_client()
+@pytest.fixture(autouse=True)
+def _enable_rate_limiting(flask_app):
+    """Temporarily enable rate limiting for tests in this module."""
+    flask_app.config["RATELIMIT_ENABLED"] = True
+    limiter.enabled = True
+    limiter.init_app(flask_app)
+    yield
+    limiter.enabled = False
+    flask_app.config["RATELIMIT_ENABLED"] = False
 
 
-def test_sign_in_rate_limit(rate_limited_client):
+def test_sign_in_rate_limit(client):
     for _ in range(10):
-        resp = rate_limited_client.post(
+        resp = client.post(
             "/sign-in",
             data={"username": "nobody", "password": "badpassword"},
         )
         assert resp.status_code != 429
 
-    resp = rate_limited_client.post(
+    resp = client.post(
         "/sign-in",
         data={"username": "nobody", "password": "badpassword"},
     )
     assert resp.status_code == 429
 
 
-def test_get_request_not_limited(rate_limited_client):
+def test_get_request_not_limited(client):
     for _ in range(15):
-        resp = rate_limited_client.get("/sign-in")
+        resp = client.get("/sign-in")
         assert resp.status_code == 200
