@@ -36,23 +36,22 @@
 
     <div>
       <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">{{ _('Image') }}</div>
-      <div class="border border-slate-200 rounded select-none">
-        <template x-for="(page, index) in imageItems" :key="'i-'+page.uuid">
+      <div class="border border-slate-200 rounded select-none"
+           x-ref="imageList"
+           @dragover.prevent="onDragOver('image', $event)"
+           @dragleave="onDragLeave('image', $event)"
+           @drop.prevent="onDrop('image', $event)"
+           @dragend="onDragEnd('image')">
+        <template x-for="(page, index) in col.image.items" :key="'i-'+page.uuid">
           <div class="flex items-center gap-2 px-3 py-2 border-b border-slate-100 last:border-b-0"
-               :class="[
-                 imageDragOver === index ? 'bg-blue-100 border-t-2 border-t-blue-400' : '',
-                 imageSelected.has(index) ? 'bg-blue-50' : (imageDragOver !== index ? 'hover:bg-slate-50' : '')
-               ]"
+               :class="col.image.selected.has(index) ? 'bg-blue-50' : 'hover:bg-slate-50'"
+               :data-index="index"
                draggable="true"
                @click="onClick('image', $event, index)"
-               @dragstart="onDragStart('image', $event, index)"
-               @dragover.prevent="onDragOver('image', $event, index)"
-               @dragleave="onDragLeave('image')"
-               @drop.prevent="onDrop('image', $event, index)"
-               @dragend="onDragEnd('image')">
+               @dragstart="onDragStart('image', $event, index)">
             <span class="text-slate-400 text-xs w-8 text-right" x-text="index + 1"></span>
             <span class="font-medium text-sm truncate flex-1" x-text="page.slug"></span>
-            <button @click.stop="openPreview(page)"
+            <button @click.stop="previewSlug = page.slug; previewUrl = page.image_url; previewOpen = true"
                     class="text-slate-400 hover:text-slate-700 shrink-0"
                     title="Preview image">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -67,20 +66,19 @@
 
     <div class="min-w-0">
       <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">{{ _('Text') }}</div>
-      <div class="border border-slate-200 rounded select-none overflow-hidden">
-        <template x-for="(page, index) in textItems" :key="'t-'+page.id">
+      <div class="border border-slate-200 rounded select-none overflow-hidden"
+           x-ref="textList"
+           @dragover.prevent="onDragOver('text', $event)"
+           @dragleave="onDragLeave('text', $event)"
+           @drop.prevent="onDrop('text', $event)"
+           @dragend="onDragEnd('text')">
+        <template x-for="(page, index) in col.text.items" :key="'t-'+page.id">
           <div class="flex items-center gap-3 px-3 py-2 border-b border-slate-100 last:border-b-0 min-w-0"
-               :class="[
-                 textDragOver === index ? 'bg-blue-100 border-t-2 border-t-blue-400' : '',
-                 textSelected.has(index) ? 'bg-blue-50' : (textDragOver !== index ? 'hover:bg-slate-50' : '')
-               ]"
+               :class="col.text.selected.has(index) ? 'bg-blue-50' : 'hover:bg-slate-50'"
+               :data-index="index"
                draggable="true"
                @click="onClick('text', $event, index)"
-               @dragstart="onDragStart('text', $event, index)"
-               @dragover.prevent="onDragOver('text', $event, index)"
-               @dragleave="onDragLeave('text')"
-               @drop.prevent="onDrop('text', $event, index)"
-               @dragend="onDragEnd('text')">
+               @dragstart="onDragStart('text', $event, index)">
             <span class="text-slate-400 text-xs w-8 text-right" x-text="index + 1"></span>
             <span class="font-medium text-sm w-24" x-text="page.slug"></span>
             <span class="text-xs text-slate-500 truncate flex-1" x-text="page.preview"></span>
@@ -123,123 +121,124 @@
 <script>
 function reorderPages() {
   const raw = {{ pages_data|tojson }};
+  const HIGHLIGHT = ['bg-blue-100', 'border-t-2', 'border-t-blue-400'];
 
   return {
-    textItems:  raw.map(p => ({ id: p.id, slug: p.slug, preview: p.preview })),
-    imageItems: raw.map(p => ({ id: p.id, slug: p.slug, uuid: p.uuid, image_url: p.image_url })),
+    col: {
+      text:  { items: raw.map(p => ({id: p.id, slug: p.slug, preview: p.preview})), selected: new Set(), lastClicked: null, dragIndex: null },
+      image: { items: raw.map(p => ({id: p.id, slug: p.slug, uuid: p.uuid, image_url: p.image_url})), selected: new Set(), lastClicked: null, dragIndex: null },
+    },
     locked: true,
     imagesDecoupled: false,
-    textSelected: new Set(), imageSelected: new Set(),
-    textLastClicked: null, imageLastClicked: null,
-    textDragIndex: null, imageDragIndex: null,
-    textDragOver: null, imageDragOver: null,
+    _highlightEls: [],
     saving: false, saveStatus: '', saveOk: false,
     previewOpen: false, previewUrl: '', previewSlug: '',
 
-    _cols(col) { return this.locked ? ['text', 'image'] : [col]; },
-    _sel(col) { return col + 'Selected'; },
-    _last(col) { return col + 'LastClicked'; },
-    _dragIdx(col) { return col + 'DragIndex'; },
-    _dragOver(col) { return col + 'DragOver'; },
-    _items(col) { return col + 'Items'; },
+    _affectedCols(c) { return this.locked ? ['text', 'image'] : [c]; },
+
+    _clearHighlight() {
+      for (const el of this._highlightEls) el.classList.remove(...HIGHLIGHT);
+      this._highlightEls = [];
+    },
+
+    _setHighlight(srcCol, index) {
+      const els = this._affectedCols(srcCol)
+        .map(c => this.$refs[c + 'List']?.querySelector(`[data-index="${index}"]`))
+        .filter(Boolean);
+      if (els.length === this._highlightEls.length && els.every((el, i) => el === this._highlightEls[i])) return;
+      this._clearHighlight();
+      this._highlightEls = els;
+      for (const el of els) el.classList.add(...HIGHLIGHT);
+    },
 
     activeSelected() {
-      return this.textSelected.size > 0 ? this.textSelected : this.imageSelected;
+      return this.col.text.selected.size > 0 ? this.col.text.selected : this.col.image.selected;
     },
 
     clearSelection() {
       for (const c of ['text', 'image']) {
-        this[this._sel(c)] = new Set();
-        this[this._last(c)] = null;
+        this.col[c].selected = new Set();
+        this.col[c].lastClicked = null;
       }
     },
 
-    openPreview(page) {
-      this.previewSlug = page.slug;
-      this.previewUrl = page.image_url;
-      this.previewOpen = true;
-    },
-
-    onClick(col, event, index) {
-      for (const c of this._cols(col)) this._applyClick(c, event, index);
-    },
-
-    _applyClick(col, event, index) {
-      const sel = this[this._sel(col)];
-      const lastKey = this._last(col);
-      if (event.shiftKey && this[lastKey] !== null) {
-        const lo = Math.min(this[lastKey], index), hi = Math.max(this[lastKey], index);
-        const next = new Set();
-        for (let i = lo; i <= hi; i++) next.add(i);
-        this[this._sel(col)] = next;
-      } else if (event.metaKey || event.ctrlKey) {
-        sel.has(index) ? sel.delete(index) : sel.add(index);
-        this[lastKey] = index;
-      } else if (sel.size === 1 && sel.has(index)) {
-        this[this._sel(col)] = new Set();
-        this[lastKey] = null;
-      } else {
-        this[this._sel(col)] = new Set([index]);
-        this[lastKey] = index;
-      }
-    },
-
-    onDragStart(col, event, index) {
-      for (const c of this._cols(col)) {
-        if (!this[this._sel(c)].has(index)) {
-          this[this._sel(c)] = new Set([index]);
-          this[this._last(c)] = index;
+    onClick(srcCol, event, index) {
+      for (const c of this._affectedCols(srcCol)) {
+        const s = this.col[c];
+        if (event.shiftKey && s.lastClicked !== null) {
+          const lo = Math.min(s.lastClicked, index), hi = Math.max(s.lastClicked, index);
+          const next = new Set();
+          for (let i = lo; i <= hi; i++) next.add(i);
+          s.selected = next;
+        } else if (event.metaKey || event.ctrlKey) {
+          s.selected.has(index) ? s.selected.delete(index) : s.selected.add(index);
+          s.lastClicked = index;
+        } else if (s.selected.size === 1 && s.selected.has(index)) {
+          s.selected = new Set();
+          s.lastClicked = null;
+        } else {
+          s.selected = new Set([index]);
+          s.lastClicked = index;
         }
-        this[this._dragIdx(c)] = index;
+      }
+    },
+
+    onDragStart(srcCol, event, index) {
+      for (const c of this._affectedCols(srcCol)) {
+        const s = this.col[c];
+        if (!s.selected.has(index)) {
+          s.selected = new Set([index]);
+          s.lastClicked = index;
+        }
+        s.dragIndex = index;
       }
       if (!this.locked) this.imagesDecoupled = true;
       event.dataTransfer.effectAllowed = 'move';
-      event.dataTransfer.setData('text/plain', this[this._sel(col)].size + ' page(s)');
+      event.dataTransfer.setData('text/plain', this.col[srcCol].selected.size + ' page(s)');
     },
 
-    onDragOver(col, event, index) {
-      for (const c of this._cols(col)) {
-        if (this[this._dragIdx(c)] === null) continue;
-        this[this._dragOver(c)] = this[this._sel(c)].has(index) ? null : index;
-      }
+    onDragOver(srcCol, event) {
+      const row = event.target.closest('[data-index]');
+      if (!row || this.col[srcCol].dragIndex === null) return;
+      const index = parseInt(row.dataset.index, 10);
+      this.col[srcCol].selected.has(index) ? this._clearHighlight() : this._setHighlight(srcCol, index);
       event.dataTransfer.dropEffect = 'move';
     },
 
-    onDragLeave(col) {
-      for (const c of this._cols(col)) this[this._dragOver(c)] = null;
+    onDragLeave(srcCol, event) {
+      const list = this.$refs[srcCol + 'List'];
+      if (list && !list.contains(event.relatedTarget)) this._clearHighlight();
     },
 
-    onDragEnd(col) {
-      for (const c of this._cols(col)) {
-        this[this._dragIdx(c)] = null;
-        this[this._dragOver(c)] = null;
+    onDragEnd(srcCol) {
+      this._clearHighlight();
+      for (const c of this._affectedCols(srcCol)) this.col[c].dragIndex = null;
+    },
+
+    onDrop(srcCol, event) {
+      const row = event.target.closest('[data-index]');
+      this._clearHighlight();
+      if (!row) return;
+      const index = parseInt(row.dataset.index, 10);
+      for (const c of this._affectedCols(srcCol)) {
+        const s = this.col[c];
+        if (s.dragIndex === null || s.selected.has(index)) continue;
+        const sel = [...s.selected].sort((a, b) => a - b);
+        const moved = sel.map(i => s.items[i]);
+        for (let i = sel.length - 1; i >= 0; i--) s.items.splice(sel[i], 1);
+        const insertAt = Math.max(0, Math.min(index - sel.filter(i => i < index).length, s.items.length));
+        s.items.splice(insertAt, 0, ...moved);
+        s.selected = new Set(moved.map((_, i) => insertAt + i));
+        s.lastClicked = insertAt;
+        s.dragIndex = null;
       }
-    },
-
-    onDrop(col, event, index) {
-      for (const c of this._cols(col)) this._applyDrop(c, index);
-    },
-
-    _applyDrop(col, index) {
-      if (this[this._dragIdx(col)] === null || this[this._sel(col)].has(index)) return;
-      const sel = [...this[this._sel(col)]].sort((a, b) => a - b);
-      const items = sel.map(i => this[this._items(col)][i]);
-      for (let i = sel.length - 1; i >= 0; i--) this[this._items(col)].splice(sel[i], 1);
-      const insertAt = Math.max(0, Math.min(index - sel.filter(i => i < index).length, this[this._items(col)].length));
-      this[this._items(col)].splice(insertAt, 0, ...items);
-      const next = new Set();
-      for (let i = 0; i < items.length; i++) next.add(insertAt + i);
-      this[this._sel(col)] = next;
-      this[this._last(col)] = insertAt;
-      this[this._dragIdx(col)] = null;
-      this[this._dragOver(col)] = null;
     },
 
     async save() {
       this.saving = true;
       this.saveStatus = '';
-      const payload = { page_ids: this.textItems.map(p => p.id) };
-      if (this.imagesDecoupled) payload.image_uuids = this.imageItems.map(p => p.uuid);
+      const payload = { page_ids: this.col.text.items.map(p => p.id) };
+      if (this.imagesDecoupled) payload.image_uuids = this.col.image.items.map(p => p.uuid);
       try {
         const r = await fetch(window.location.href, {
           method: 'POST',

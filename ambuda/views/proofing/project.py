@@ -1005,10 +1005,14 @@ def reorder_pages(slug):
 
         session = q.get_session()
         order_mapping = {page_id: i for i, page_id in enumerate(page_ids)}
+        slug_mapping = {page_id: str(i + 1) for i, page_id in enumerate(page_ids)}
         session.execute(
             sqla.update(db.Page)
             .where(db.Page.id.in_(page_ids))
-            .values(order=sqla.case(order_mapping, value=db.Page.id))
+            .values(
+                order=sqla.case(order_mapping, value=db.Page.id),
+                slug=sqla.case(slug_mapping, value=db.Page.id),
+            )
         )
         if image_uuids is not None:
             tmp_mapping = {pid: f"tmp-{pid}" for pid in page_ids}
