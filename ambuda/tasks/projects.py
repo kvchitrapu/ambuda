@@ -9,6 +9,7 @@ import re
 import hashlib
 import shutil
 import tempfile
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -627,11 +628,16 @@ def regenerate_project_pages_inner(
                     f"PDF length and project length don't match ({num_pages} != {len(pages)})"
                 )
 
-            task_status.progress(0, num_pages)
+            task_status.progress(0, num_pages, upload_current=0, upload_total=num_pages)
+
+            upload_count = [0]
+            upload_lock = threading.Lock()
 
             def _upload_and_cleanup(s3_path, local_path):
                 s3_path.upload_file(str(local_path))
                 local_path.unlink()
+                with upload_lock:
+                    upload_count[0] += 1
 
             with ThreadPoolExecutor(max_workers=4) as executor:
                 futures = []
@@ -645,9 +651,18 @@ def regenerate_project_pages_inner(
                         image_path,
                     )
                     futures.append(fut)
-                    task_status.progress(i + 1, num_pages)
+                    with upload_lock:
+                        uc = upload_count[0]
+                    task_status.progress(
+                        i + 1, num_pages, upload_current=uc, upload_total=num_pages
+                    )
                 for fut in as_completed(futures):
                     fut.result()
+                    with upload_lock:
+                        uc = upload_count[0]
+                    task_status.progress(
+                        num_pages, num_pages, upload_current=uc, upload_total=num_pages
+                    )
 
             logging.info(
                 f"Regenerated {num_pages} page images for project {project_slug}."
@@ -710,64 +725,133 @@ def replace_project_pdf_inner(
         doc.close()
 
         existing_count = len(existing_pages)
+        # +1 for the final PDF upload to S3
         total_work = new_count + 1
-        task_status.progress(0, total_work)
+        upload_total = new_count + 1
+        task_status.progress(0, total_work, upload_current=0, upload_total=upload_total)
 
         s3_bucket = config_obj.S3_BUCKET
         temp_dir = Path(tempfile.mkdtemp(prefix=f"ambuda_replace_{project_slug}_"))
 
+        upload_count = [0]
+        upload_lock = threading.Lock()
+
+        def _upload_and_cleanup(s3_path, local_path):
+            s3_path.upload_file(str(local_path))
+            local_path.unlink()
+            with upload_lock:
+                upload_count[0] += 1
+
+        def _upload_only(s3_path, local_path):
+            s3_path.upload_file(str(local_path))
+            with upload_lock:
+                upload_count[0] += 1
+
         try:
-            for i in range(min(new_count, existing_count)):
-                page_obj = existing_pages[i]
-                image_path = temp_dir / f"{page_obj.uuid}.jpg"
-                _save_page_image(Path(pdf_path), i, image_path)
-                if s3_bucket:
-                    page_obj.s3_path(s3_bucket).upload_file(str(image_path))
-                image_path.unlink()
-                task_status.progress(i + 1, total_work)
+            with ThreadPoolExecutor(max_workers=4) as executor:
+                futures = []
 
-            if new_count > existing_count:
-                if existing_pages:
-                    max_slug = max(
-                        int(p.slug) for p in existing_pages if p.slug.isdigit()
-                    )
-                    max_order = max(p.order for p in existing_pages)
-                else:
-                    max_slug = 0
-                    max_order = 0
-
-                unreviewed = session.scalars(
-                    select(db.PageStatus).filter_by(name="reviewed-0")
-                ).one()
-
-                for i in range(existing_count, new_count):
-                    offset = i - existing_count + 1
-                    page_uuid = str(uuid.uuid4())
-                    new_page = db.Page(
-                        project_id=project.id,
-                        slug=str(max_slug + offset),
-                        uuid=page_uuid,
-                        order=max_order + offset,
-                        status_id=unreviewed.id,
-                    )
-                    session.add(new_page)
-                    session.flush()
-
-                    image_path = temp_dir / f"{page_uuid}.jpg"
+                for i in range(min(new_count, existing_count)):
+                    page_obj = existing_pages[i]
+                    image_path = temp_dir / f"{page_obj.uuid}.jpg"
                     _save_page_image(Path(pdf_path), i, image_path)
                     if s3_bucket:
-                        new_page.s3_path(s3_bucket).upload_file(str(image_path))
-                    image_path.unlink()
-                    task_status.progress(i + 1, total_work)
+                        fut = executor.submit(
+                            _upload_and_cleanup,
+                            page_obj.s3_path(s3_bucket),
+                            image_path,
+                        )
+                        futures.append(fut)
+                    else:
+                        image_path.unlink()
+                    with upload_lock:
+                        uc = upload_count[0]
+                    task_status.progress(
+                        i + 1,
+                        total_work,
+                        upload_current=uc,
+                        upload_total=upload_total,
+                    )
 
-            if s3_bucket:
-                project.s3_path(s3_bucket).upload_file(pdf_path)
+                if new_count > existing_count:
+                    if existing_pages:
+                        max_slug = max(
+                            int(p.slug) for p in existing_pages if p.slug.isdigit()
+                        )
+                        max_order = max(p.order for p in existing_pages)
+                    else:
+                        max_slug = 0
+                        max_order = 0
+
+                    unreviewed = session.scalars(
+                        select(db.PageStatus).filter_by(name="reviewed-0")
+                    ).one()
+
+                    for i in range(existing_count, new_count):
+                        offset = i - existing_count + 1
+                        page_uuid = str(uuid.uuid4())
+                        new_page = db.Page(
+                            project_id=project.id,
+                            slug=str(max_slug + offset),
+                            uuid=page_uuid,
+                            order=max_order + offset,
+                            status_id=unreviewed.id,
+                        )
+                        session.add(new_page)
+                        session.flush()
+
+                        image_path = temp_dir / f"{page_uuid}.jpg"
+                        _save_page_image(Path(pdf_path), i, image_path)
+                        if s3_bucket:
+                            fut = executor.submit(
+                                _upload_and_cleanup,
+                                new_page.s3_path(s3_bucket),
+                                image_path,
+                            )
+                            futures.append(fut)
+                        else:
+                            image_path.unlink()
+                        with upload_lock:
+                            uc = upload_count[0]
+                        task_status.progress(
+                            i + 1,
+                            total_work,
+                            upload_current=uc,
+                            upload_total=upload_total,
+                        )
+
+                # Upload the source PDF itself
+                if s3_bucket:
+                    fut = executor.submit(
+                        _upload_only,
+                        project.s3_path(s3_bucket),
+                        pdf_path,
+                    )
+                    futures.append(fut)
+
+                task_status.progress(
+                    new_count,
+                    total_work,
+                    upload_current=upload_count[0],
+                    upload_total=upload_total,
+                )
+
+                # Wait for remaining uploads, reporting progress as each completes
+                for fut in as_completed(futures):
+                    fut.result()
+                    with upload_lock:
+                        uc = upload_count[0]
+                    task_status.progress(
+                        total_work,
+                        total_work,
+                        upload_current=uc,
+                        upload_total=upload_total,
+                    )
 
             if source_url is not None:
                 project.source_url = source_url
 
             session.commit()
-            task_status.progress(total_work, total_work)
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 

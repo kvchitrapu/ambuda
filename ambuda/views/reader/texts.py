@@ -333,7 +333,7 @@ def section(text_slug, section_slug):
     commentaries = [c for c in siblings if c.language == source_lang]
 
     return render_template(
-        "texts/section.html",
+        "texts/reader.html",
         text=text_,
         prev=prev,
         section=cur,

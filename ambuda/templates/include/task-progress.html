@@ -17,7 +17,11 @@
 
 {% elif status == 'PROGRESS' %}
   {{ progress_bar(percent) }}
-  <p>Processed {{ current }} of {{ total }} total pages.</p>
+  <p>Rendered {{ current }} of {{ total }} total pages.</p>
+  {% if upload_total is defined and upload_total > 0 %}
+    {{ progress_bar(upload_percent) }}
+    <p>Uploaded {{ upload_current }} of {{ upload_total }} pages to cloud storage.</p>
+  {% endif %}
 
 {% elif status == 'SUCCESS' %}
   {{ progress_bar(100) }}

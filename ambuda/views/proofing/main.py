@@ -326,11 +326,15 @@ def create_project_status(task_id):
     if isinstance(info, Exception):
         current = total = percent = 0
         slug = None
+        upload_current = upload_total = upload_percent = 0
     else:
         current = info.get("current", 100)
         total = info.get("total", 100)
         slug = info.get("slug", None)
         percent = 100 * current / total
+        upload_current = info.get("upload_current", 0)
+        upload_total = info.get("upload_total", 0)
+        upload_percent = 100 * upload_current / upload_total if upload_total else 0
 
     return render_template(
         "include/task-progress.html",
@@ -339,6 +343,9 @@ def create_project_status(task_id):
         total=total,
         percent=percent,
         slug=slug,
+        upload_current=upload_current,
+        upload_total=upload_total,
+        upload_percent=upload_percent,
     )
 
 

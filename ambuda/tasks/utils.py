@@ -16,11 +16,12 @@ class TaskStatus:
     - For local usage (unit tests, CLI, ...), use a LocalTaskStatus instead.
     """
 
-    def progress(self, current: int, total: int):
+    def progress(self, current: int, total: int, **extra):
         """Update the task's progress.
 
         :param current: progress numerator
         :param total: progress denominator
+        :param extra: additional progress fields (e.g. upload_current, upload_total)
         """
         raise NotImplementedError
 
@@ -42,16 +43,17 @@ class CeleryTaskStatus(TaskStatus):
     def __init__(self, task):
         self.task = task
 
-    def progress(self, current: int, total: int):
+    def progress(self, current: int, total: int, **extra):
         """Update the task's progress.
 
         :param current: progress numerator
         :param total: progress denominator
+        :param extra: additional progress fields (e.g. upload_current, upload_total)
         """
         # Celery doesn't have a "PROGRESS" state, so just use a hard-coded string.
-        self.task.update_state(
-            state="PROGRESS", meta={"current": current, "total": total}
-        )
+        meta = {"current": current, "total": total}
+        meta.update(extra)
+        self.task.update_state(state="PROGRESS", meta=meta)
 
     def success(self, num_pages: int, slug: str):
         """Mark the task as a success."""
@@ -68,8 +70,12 @@ class CeleryTaskStatus(TaskStatus):
 class LocalTaskStatus(TaskStatus):
     """Helper class to track progress on a task running locally."""
 
-    def progress(self, current: int, total: int):
+    def progress(self, current: int, total: int, **extra):
         logging.info(f"{current} / {total} complete")
+        if extra.get("upload_current") is not None:
+            logging.info(
+                f"  uploads: {extra['upload_current']} / {extra.get('upload_total', '?')}"
+            )
 
     def success(self, num_pages: int, slug: str):
         logging.info(f"Succeeded. Project is at {slug}.")

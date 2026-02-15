@@ -541,7 +541,11 @@ On wide screens, the sidebar is on the right side of a split view.
         </table>
       </template>
 
-      <template x-if="!analyzeData.error && analyzeData.words.length === 0">
+      <template x-if="analyzeData.loading">
+        <p class="text-slate-400 text-sm">{{ _('Loading...') }}</p>
+      </template>
+
+      <template x-if="!analyzeData.error && !analyzeData.loading && analyzeData.words.length === 0">
         <p class="text-slate-400 text-sm">{{ _('Click a verse to see its word-by-word analysis.') }}</p>
       </template>
     </div>

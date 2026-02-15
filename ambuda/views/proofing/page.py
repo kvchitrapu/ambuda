@@ -199,7 +199,7 @@ def edit(project_slug, page_slug):
         form.content.data = data["content"]
 
     return render_template(
-        "proofing/pages/edit.html",
+        "proofing/pages/proofer.html",
         conflict=None,
         cur=ctx.cur,
         form=form,
@@ -287,7 +287,7 @@ def edit_post(project_slug, page_slug):
     data["hasEdits"] = True
 
     return render_template(
-        "proofing/pages/edit.html",
+        "proofing/pages/proofer.html",
         conflict=conflict,
         cur=ctx.cur,
         form=form,
