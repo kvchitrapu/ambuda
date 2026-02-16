@@ -513,7 +513,10 @@ def _create_tei_sections_and_blocks(
     if revisions is None:
         session = q.get_session()
         subq = (
-            select(db.Revision.page_id, func.max(db.Revision.id).label("max_id"))
+            select(
+                db.Revision.page_id,
+                func.max(db.Revision.created_at).label("max_created"),
+            )
             .where(db.Revision.project_id == project.id)
             .group_by(db.Revision.page_id)
             .subquery()
@@ -521,8 +524,13 @@ def _create_tei_sections_and_blocks(
         revisions = (
             session.execute(
                 select(db.Revision)
-                .join(subq, db.Revision.id == subq.c.max_id)
-                .order_by(db.Revision.page_id)
+                .join(
+                    subq,
+                    (db.Revision.page_id == subq.c.page_id)
+                    & (db.Revision.created_at == subq.c.max_created),
+                )
+                .join(db.Page, db.Revision.page_id == db.Page.id)
+                .order_by(db.Page.order)
             )
             .scalars()
             .all()
