@@ -25,7 +25,7 @@ from werkzeug.exceptions import abort
 from werkzeug.utils import redirect
 
 import ambuda.utils.text_publishing as publishing_utils
-from ambuda.utils.text_publishing import Filter
+from ambuda.utils.text_publishing import Filter, TEISection
 from ambuda import database as db
 from ambuda import queries as q
 from ambuda.enums import SitePageStatus
@@ -405,7 +405,6 @@ def config(slug):
 
 
 @bp.route("/<project_slug>/publish/<text_slug>/preview", methods=["GET"])
-@p2_required
 def preview(project_slug, text_slug):
     """Preview the changes that will be made when publishing a single text."""
 
@@ -561,13 +560,14 @@ def create(project_slug, text_slug):
         else:
             text.status = TextStatus.P2
 
-        existing_sections = {s.slug for s in text.sections}
-        doc_sections = {s.slug for s in document_data.sections}
+        existing_section_slugs = {s.slug for s in text.sections}
+        doc_sections = [s for s in document_data.items if isinstance(s, TEISection)]
+        doc_section_slugs = {s.slug for s in doc_sections}
         section_map = {s.slug: s for s in text.sections}
 
-        if existing_sections != doc_sections:
-            new_sections = doc_sections - existing_sections
-            old_sections = existing_sections - doc_sections
+        if existing_section_slugs != doc_sections:
+            new_sections = doc_section_slugs - existing_section_slugs
+            old_sections = existing_section_slugs - doc_section_slugs
 
             for old_slug in old_sections:
                 old_section = next(
@@ -579,7 +579,7 @@ def create(project_slug, text_slug):
 
             for new_slug in new_sections:
                 doc_section = next(
-                    (s for s in document_data.sections if s.slug == new_slug), None
+                    (s for s in doc_sections if s.slug == new_slug), None
                 )
                 if doc_section:
                     new_section = db.TextSection(
@@ -591,6 +591,10 @@ def create(project_slug, text_slug):
                     section_map[new_slug] = new_section
 
             session.flush()
+
+        for i, doc_section in enumerate(doc_sections):
+            section = section_map[doc_section.slug]
+            section.order = i
 
         existing_blocks_list = (
             session.execute(
@@ -604,7 +608,7 @@ def create(project_slug, text_slug):
 
         new_doc_blocks = []
         block_sections = []
-        for doc_section in document_data.sections:
+        for doc_section in doc_sections:
             section = section_map[doc_section.slug]
             for block in doc_section.blocks:
                 new_doc_blocks.append(block)

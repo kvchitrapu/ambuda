@@ -5,16 +5,16 @@ import dataclasses as dc
 from collections import Counter
 from datetime import date
 import re
-import xml.etree.ElementTree as ET
 from lxml import etree
 from pathlib import Path
 from typing import Iterable
 
-import defusedxml.ElementTree as DET
+from sqlalchemy import select, func
 
 from ambuda import database as db
 from ambuda.utils.project_structuring import ProofPage
 from ambuda.utils import project_utils
+from ambuda import queries as q
 from ambuda.utils.xml import indent_xml_file_in_place
 from ambuda.utils.xml_validation import (
     BlockType,
@@ -24,6 +24,23 @@ from ambuda.utils.xml_validation import (
 
 
 DEFAULT_PRINT_PAGE_NUMBER = "-"
+
+_XML_NS = "http://www.w3.org/XML/1998/namespace"
+_SAFE_PARSER = etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=False)
+
+
+def _safe_fromstring(text: str | bytes) -> etree._Element:
+    """Parse an XML string using a parser that rejects entity expansion and
+    network access (protects against XXE and billion-laughs attacks)."""
+    if isinstance(text, str):
+        text = text.encode("utf-8")
+    return etree.fromstring(text, _SAFE_PARSER)
+
+
+def _to_string(el: etree._Element) -> str:
+    """Serialize an element to a Unicode string with readable self-closing tags."""
+    s = etree.tostring(el, encoding="unicode")
+    return re.sub(r"(?<! )/>", " />", s)
 
 
 @dc.dataclass
@@ -37,7 +54,7 @@ class IndexedBlock:
     # 0-indexed block index within the page
     block_index: int
     # the raw page XML
-    page_xml: ET.Element
+    page_xml: etree._Element
 
 
 @dc.dataclass
@@ -69,7 +86,8 @@ class TEIDocument:
 
 @dc.dataclass
 class TEIConversion:
-    sections: list[TEISection]
+    # A mix of sections and blocks.
+    items: list[TEISection | TEIBlock]
     errors: list[str]
     # Histogram of page statuses
     page_statuses: Counter
@@ -144,6 +162,44 @@ class Filter:
                 return i
         return None
 
+    def image_range(self) -> tuple[int, int] | None:
+        """Extract the image range from the filter, if it's a simple image filter.
+
+        Returns (min_image, max_image) if the filter is a simple image/page
+        predicate (possibly combined with ``and``). Returns ``None`` for
+        non-image filters or complex boolean combinations where we cannot
+        safely narrow the range.
+        """
+
+        def _range(sexp) -> tuple[int, int] | None:
+            try:
+                key = sexp[0]
+            except (IndexError, TypeError):
+                return None
+
+            if key in ("image", "page"):
+                start, _ = self._parse_image_spec(sexp[1])
+                try:
+                    end, _ = self._parse_image_spec(sexp[2])
+                except IndexError:
+                    end = start
+                return (start, end)
+
+            if key == "and":
+                lo, hi = 1, float("inf")
+                for child in sexp[1:]:
+                    r = _range(child)
+                    if r is not None:
+                        lo = max(lo, r[0])
+                        hi = min(hi, r[1])
+                if hi == float("inf"):
+                    return None
+                return (lo, int(hi))
+
+            return None
+
+        return _range(self.predicate)
+
     def matches(self, block: IndexedBlock) -> bool:
         """Return whether `block` matches this filter's condition.
 
@@ -203,7 +259,7 @@ class Filter:
 # - build footnote refs and check them with warnings
 #   - <ref target="#X"> type="noteAnchor">
 #   - <note xml:id="X" type="footnote">...</note>
-def _rewrite_block_to_tei_xml(xml: ET.Element, image_number: int):
+def _rewrite_block_to_tei_xml(xml: etree._Element, image_number: int):
     """Rewrite a block of proofing XML into TEI XML."""
     # Text reshaping
     # TODO: move this elsewhere?
@@ -252,7 +308,7 @@ def _rewrite_block_to_tei_xml(xml: ET.Element, image_number: int):
         speaker = None
     if speaker is not None:
         old_tag = xml.tag
-        old_attrib = xml.attrib
+        old_attrib = dict(xml.attrib)
         old_children = [x for x in xml if x.tag != InlineType.SPEAKER]
 
         speaker_tail = speaker.tail or ""
@@ -265,7 +321,7 @@ def _rewrite_block_to_tei_xml(xml: ET.Element, image_number: int):
             # Special case: <p> contains only speaker, so don't create a child elem.
             return
 
-        child = ET.SubElement(xml, old_tag, old_attrib)
+        child = etree.SubElement(xml, old_tag, old_attrib)
         child.text = (speaker_tail + (xml[-1].text or "")).strip()
         child.extend(old_children)
         _rewrite_block_to_tei_xml(child, image_number)
@@ -289,7 +345,10 @@ def _rewrite_block_to_tei_xml(xml: ET.Element, image_number: int):
             if (el.tag, el_next.tag) == ("fix", "error") and not el_tail:
                 # Normalize to avoid weird errors later.
                 el.tail = ""
-                xml[i], xml[i + 1] = el_next, el
+                xml.remove(el)
+                xml.remove(el_next)
+                xml.insert(i, el_next)
+                xml.insert(i + 1, el)
 
         # Reload since `el` may be stale after swap.
         el = xml[i]
@@ -298,10 +357,10 @@ def _rewrite_block_to_tei_xml(xml: ET.Element, image_number: int):
             has_counterpart = i + 1 < len(xml) and not el_tail
             maybe_fix = xml[i + 1] if has_counterpart else None
 
-            choice = ET.Element("choice")
-            sic = ET.SubElement(choice, "sic")
+            choice = etree.Element("choice")
+            sic = etree.SubElement(choice, "sic")
             sic.text = el.text or ""
-            corr = ET.SubElement(choice, "corr")
+            corr = etree.SubElement(choice, "corr")
             if maybe_fix is not None:
                 corr.text = maybe_fix.text or ""
                 choice.tail = maybe_fix.tail
@@ -328,10 +387,12 @@ def _rewrite_block_to_tei_xml(xml: ET.Element, image_number: int):
     if xml.tag == "p":
 
         def _normalize_text(xml):
-            xml.text = re.sub(r"-\n", "", xml.text or "", flags=re.M)
-            xml.text = re.sub(r"\s+", " ", xml.text, flags=re.M)
-            xml.tail = re.sub(r"-\n", "", xml.tail or "", flags=re.M)
-            xml.tail = re.sub(r"\s+", " ", xml.tail, flags=re.M)
+            if xml.text is not None:
+                xml.text = re.sub(r"-\n", "", xml.text, flags=re.M)
+                xml.text = re.sub(r"\s+", " ", xml.text, flags=re.M)
+            if xml.tail is not None:
+                xml.tail = re.sub(r"-\n", "", xml.tail, flags=re.M)
+                xml.tail = re.sub(r"\s+", " ", xml.tail, flags=re.M)
             for el in xml:
                 _normalize_text(el)
 
@@ -343,16 +404,16 @@ def _rewrite_block_to_tei_xml(xml: ET.Element, image_number: int):
         except StopIteration:
             chaya = None
         if chaya is not None:
-            choice = ET.Element(TEITag.CHOICE)
+            choice = etree.Element(TEITag.CHOICE)
             choice.attrib["type"] = "chaya"
 
-            prakrit = ET.SubElement(choice, "seg")
-            prakrit.attrib["xml:lang"] = "pra"
+            prakrit = etree.SubElement(choice, "seg")
+            prakrit.attrib[f"{{{_XML_NS}}}lang"] = "pra"
             prakrit.text = xml.text
             prakrit.extend(x for x in xml if x.tag != "chaya")
 
-            sanskrit = ET.SubElement(choice, "seg")
-            sanskrit.attrib["xml:lang"] = "sa"
+            sanskrit = etree.SubElement(choice, "seg")
+            sanskrit.attrib[f"{{{_XML_NS}}}lang"] = "sa"
             if "rend" in chaya.attrib:
                 sanskrit.attrib["rend"] = chaya.attrib["rend"]
             sanskrit.text = chaya.text
@@ -366,19 +427,19 @@ def _rewrite_block_to_tei_xml(xml: ET.Element, image_number: int):
     if xml.tag == "lg":
         lines = []
         for fragment in (xml.text or "").strip().splitlines():
-            line = ET.Element("l")
+            line = etree.Element("l")
             line.text = fragment
             lines.append(line)
 
         for el in xml:
             if not lines:
-                lines.append(ET.Element("l"))
+                lines.append(etree.Element("l"))
             lines[-1].append(el)
             for i, fragment in enumerate((el.tail or "").splitlines()):
                 if i == 0:
                     el.tail = fragment.strip()
                 else:
-                    lines.append(ET.Element("l"))
+                    lines.append(etree.Element("l"))
                     lines[-1].text = fragment.strip()
 
         xml.text = ""
@@ -387,13 +448,13 @@ def _rewrite_block_to_tei_xml(xml: ET.Element, image_number: int):
 
     # At this point, block elements should have no attrib data left. Clean up lingering references
     # from our proofing XML.
-    xml.attrib = {}
+    xml.attrib.clear()
     if xml.tag == "note":
         xml.attrib["type"] = "footnote"
 
 
 def _concatenate_tei_xml_blocks_across_page_boundary(
-    first: ET.Element, second: ET.Element, page_number: str
+    first: etree._Element, second: etree._Element, page_number: str
 ):
     """Concatenate two blocks of TEI XML by updating the first block in-place.
 
@@ -405,7 +466,7 @@ def _concatenate_tei_xml_blocks_across_page_boundary(
         _concatenate_tei_xml_blocks_across_page_boundary(first[1], second, page_number)
         return
 
-    pb = ET.SubElement(first, "pb")
+    pb = etree.SubElement(first, "pb")
     pb.attrib["n"] = page_number
 
     if first.tag in {"p", "lg"}:
@@ -444,42 +505,61 @@ class NCounter:
 
 
 def _create_tei_sections_and_blocks(
-    project: db.Project, config: db.PublishConfig
+    project: db.Project,
+    config: db.PublishConfig,
+    revisions: list[db.Revision] | None = None,
 ) -> TEIConversion:
     """Create TEI sections and blocks from a project."""
-    revisions = []
-    for page in project.pages:
-        if not page.revisions:
-            continue
-        latest_revision = page.revisions[-1]
-        revisions.append(latest_revision)
+    if revisions is None:
+        session = q.get_session()
+        subq = (
+            select(db.Revision.page_id, func.max(db.Revision.id).label("max_id"))
+            .where(db.Revision.project_id == project.id)
+            .group_by(db.Revision.page_id)
+            .subquery()
+        )
+        revisions = (
+            session.execute(
+                select(db.Revision)
+                .join(subq, db.Revision.id == subq.c.max_id)
+                .order_by(db.Revision.page_id)
+            )
+            .scalars()
+            .all()
+        )
 
     rules = project_utils.parse_page_number_spec(project.page_numbers)
     page_numbers = project_utils.apply_rules(len(project.pages), rules)
 
+    target = config.target or ""
+    if target.startswith("("):
+        block_filter = Filter(target)
+    else:
+        # Legacy behavior.
+        block_filter = Filter(f"(label {target})")
+    img_range = block_filter.image_range()
+
     def _iter_blocks(revisions) -> Iterable[IndexedBlock]:
         """Iterate over all blocks in the given revisions."""
         for i, revision in enumerate(revisions):
+            image_number = i + 1
+            if img_range and (
+                image_number < img_range[0] or image_number > img_range[1]
+            ):
+                continue
+
             page_text = revision.content
             try:
-                page_xml = DET.fromstring(page_text)
-            except ET.ParseError:
+                page_xml = _safe_fromstring(page_text)
+            except etree.XMLSyntaxError:
                 page_struct = ProofPage.from_content_and_page_id(page_text, 0)
                 page_xml_str = page_struct.to_xml_string()
-                page_xml = DET.fromstring(page_xml_str)
+                page_xml = _safe_fromstring(page_xml_str)
 
-            image_number = i + 1
             for block_index, block in enumerate(page_xml):
                 yield IndexedBlock(revision, image_number, block_index, page_xml)
 
     def _iter_filtered_blocks(revisions) -> Iterable[IndexedBlock]:
-        target = config.target or ""
-        if target.startswith("("):
-            block_filter = Filter(target)
-        else:
-            # Legacy behavior.
-            block_filter = Filter(f"(label {target})")
-
         for block in _iter_blocks(revisions):
             block_xml = block.page_xml[block.block_index]
             if block_xml.tag == BlockType.IGNORE:
@@ -500,9 +580,9 @@ def _create_tei_sections_and_blocks(
 
     errors = []
     # n --> block
-    element_map: dict[str, ET.Element] = {}
+    element_map: dict[str, etree._Element] = {}
     # n -> <note> block
-    footnote_map: dict[str, ET.Element] = {}
+    footnote_map: dict[str, etree._Element] = {}
     # n --> page ID (for tying blocks to the pages they come from.)
     page_map: dict[str, int] = {}
     # tag -> last n for this tag type.
@@ -626,18 +706,18 @@ def _create_tei_sections_and_blocks(
                     note_id = f"fn{fn_n}"
                     fn_n += 1
                     note = footnote_map[ref_target]
-                    note.attrib["xml:id"] = note_id
+                    note.attrib[f"{{{_XML_NS}}}id"] = note_id
                     el.attrib["target"] = f"#{note_id}"
                     tei_block.append(note)
 
     # Assemble blocks into a document.
-    tei_sections = {}
-    for block_slug, tree in element_map.items():
-        assert block_slug in page_map
-        page_id = page_map[block_slug]
+    tei_items = {}
+    for block_n, tree in element_map.items():
+        assert block_n in page_map
+        page_id = page_map[block_n]
         block = TEIBlock(
-            xml=ET.tostring(tree, encoding="unicode"),
-            slug=block_slug,
+            xml=_to_string(tree),
+            slug=block_n,
             page_id=page_id,
         )
 
@@ -645,21 +725,22 @@ def _create_tei_sections_and_blocks(
         # and it looks ugly.
         block.xml = re.sub(r"\[\^.*?\]", "", block.xml)
 
-        section_n, _, verse_n = block_slug.rpartition(".")
-        if not section_n:
-            section_n = "all"
-
-        if section_n in tei_sections:
-            section = tei_sections[section_n]
+        section_n, _, verse_n = block_n.rpartition(".")
+        if section_n:
+            # Insert block into section.
+            if section_n not in tei_items:
+                section = TEISection(slug=section_n, blocks=[])
+                tei_items[section_n] = section
+            section = tei_items[section_n]
+            section.blocks.append(block)
         else:
-            section = TEISection(slug=section_n, blocks=[])
-            tei_sections[section_n] = section
+            # Append the block as a regular item.
+            # (Example: text with title and multiple sections)
+            tei_items[block_n] = block
 
-        section.blocks.append(block)
-
-    sections = list(tei_sections.values())
+    items = list(tei_items.values())
     return TEIConversion(
-        sections=sections,
+        items=items,
         errors=errors,
         page_statuses=page_statuses,
     )
@@ -670,15 +751,25 @@ def _create_tei_sections_and_blocks(
 
 
 def create_tei_document(
-    project: db.Project, config: db.PublishConfig, out_path: Path
+    project: db.Project,
+    config: db.PublishConfig,
+    out_path: Path | None = None,
+    revisions: list[db.Revision] | None = None,
 ) -> TEIConversion:
     """Convert the project to a TEI document for publication.
+
+    If *out_path* is ``None``, only the conversion data is returned and no
+    XML file is written.
 
     Approach:
     - rewrite proof XML into TEI XML. Proofing XML is more user-friendly than TEI XMl,
       and we're using it for now until we improve our editor.
     - stitch pages and blocks together, accounting for page breaks, fragments, etc.
     """
+
+    conversion = _create_tei_sections_and_blocks(project, config, revisions=revisions)
+    if out_path is None:
+        return conversion
 
     MISSING = "(missing)"
 
@@ -768,25 +859,25 @@ def create_tei_document(
                 # </revisionDesc>
             # </teiHeader>
 
-            conversion = _create_tei_sections_and_blocks(project, config)
             errors.extend(conversion.errors)
             with xf.element(
                 "text", {"xml:id": config.slug, "xml:lang": config.language}
             ):
                 with xf.element("body"):
-                    sections = conversion.sections
-                    if len(sections) == 1:
-                        for block in sections[0].blocks:
-                            el = etree.fromstring(block.xml)
-                            el.set("n", block.slug)
-                            xf.write(el)
-                    else:
-                        for section in sections:
-                            with xf.element("div", {"n": section.slug}):
-                                for block in section.blocks:
-                                    el = etree.fromstring(block.xml)
+                    items = conversion.items
+                    for item in items:
+                        if isinstance(item, TEISection):
+                            with xf.element("div", {"n": item.slug}):
+                                for block in item.blocks:
+                                    el = _safe_fromstring(block.xml)
                                     el.set("n", block.slug)
                                     xf.write(el)
+                        elif isinstance(item, TEIBlock):
+                            el = _safe_fromstring(item.xml)
+                            el.set("n", item.slug)
+                            xf.write(el)
+                        else:
+                            raise ValueError(f"Unknown item type :{item.__name__}")
             # </text>
         # </TEI>
 
@@ -808,7 +899,7 @@ def parse_tei_document(xml_path: Path) -> TEIDocument:
     section_map = {}
     for event, elem in etree.iterparse(str(xml_path), events={"end"}):
         if elem.tag == f"{NS}teiHeader":
-            header = ET.tostring(elem, encoding="unicode").strip()
+            header = _to_string(elem).strip()
 
         elif elem.tag in BLOCK_TAGS:
             n = elem.attrib.get("n")
@@ -819,7 +910,7 @@ def parse_tei_document(xml_path: Path) -> TEIDocument:
             for x in elem.getiterator():
                 x.tag = etree.QName(x).localname
 
-            block_xml = ET.tostring(elem, encoding="unicode").strip()
+            block_xml = _to_string(elem).strip()
             section_n, _, block_n = n.rpartition(".")
             section_n = section_n or "all"
             section_map.setdefault(section_n, []).append(

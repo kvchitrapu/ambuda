@@ -76,7 +76,12 @@ class Text(Base):
     parent_id = foreign_key("texts.id", nullable=True)
 
     #: An ordered list of the sections contained within this text.
-    sections = relationship("TextSection", backref="text", cascade="delete")
+    sections = relationship(
+        "TextSection",
+        backref="text",
+        cascade="delete",
+        order_by="TextSection.order",
+    )
     #: The genre this text belongs to.
     genre = relationship("Genre", backref="texts")
     #: The project that created this text.
@@ -168,7 +173,10 @@ class TextSection(Base):
     #: organize a text into different sections.
     slug: Mapped[str] = mapped_column(String, index=True, nullable=False)
     #: The title of this section.
+    #: TODO: is this still necessary? consider dropping.
     title: Mapped[str] = mapped_column(String, nullable=False)
+    #: Explicit ordering within the parent text.
+    order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     #: An ordered list of the blocks contained within this section.
     blocks = relationship(
         "TextBlock", backref="section", order_by=lambda: TextBlock.n, cascade="delete"

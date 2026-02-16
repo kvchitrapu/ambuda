@@ -1,48 +1,17 @@
-import dataclasses as dc
-import xml.etree.ElementTree as ET
-
+from lxml import etree
 import pytest
 
+from ambuda import database as db
 from ambuda.utils import text_publishing as s
-
-
-# All of these mock avoid the hassle of constructing db objects, defining all fields, etc.
-
-@dc.dataclass
-class MockStatus:
-    name: str
-
-
-@dc.dataclass
-class MockRevision:
-    id: int
-    page_id: int
-    content: str
-    status: MockStatus | None = None
-
-
-@dc.dataclass
-class MockPage:
-    revisions: list[MockRevision]
-
-
-@dc.dataclass
-class MockProject:
-    pages: list[MockPage]
-    page_numbers: str = ""
-
-
-@dc.dataclass
-class MockConfig:
-    target: str = "(and)"
 
 
 # Filtering
 # -------------------------------------------------------------------
 
+
 def _make_block(image_number, block_index, page_xml_str):
-    page_xml = ET.fromstring(page_xml_str)
-    revision = MockRevision(id=1, page_id=1, content=page_xml_str)
+    page_xml = etree.fromstring(page_xml_str)
+    revision = db.Revision(id=1, page_id=1, content=page_xml_str)
     return s.IndexedBlock(
         revision=revision,
         image_number=image_number,
@@ -214,6 +183,7 @@ def test_filter_matches__image_label_picks_first():
 # Block-level rewriting
 # -------------------------------------------------------------------
 
+
 @pytest.mark.parametrize(
     "input,expected",
     [
@@ -301,10 +271,10 @@ def test_filter_matches__image_label_picks_first():
     ],
 )
 def test_rewrite_block_to_tei_xml(input, expected):
-    xml = ET.fromstring(input)
+    xml = etree.fromstring(input)
     s._rewrite_block_to_tei_xml(xml, 42)
-    actual = ET.tostring(xml)
-    assert expected.encode("utf-8") == actual
+    actual = s._to_string(xml)
+    assert expected == actual
 
 
 @pytest.mark.parametrize(
@@ -316,10 +286,10 @@ def test_rewrite_block_to_tei_xml(input, expected):
     ],
 )
 def test_rewrite_block_to_tei_xml__speaker(input, expected):
-    xml = ET.fromstring(input)
+    xml = etree.fromstring(input)
     s._rewrite_block_to_tei_xml(xml, 42)
-    actual = ET.tostring(xml)
-    assert expected.encode("utf-8") == actual
+    actual = s._to_string(xml)
+    assert expected == actual
 
 
 @pytest.mark.parametrize(
@@ -334,10 +304,10 @@ def test_rewrite_block_to_tei_xml__speaker(input, expected):
     ],
 )
 def test_rewrite_block_to_tei_xml__stage(input, expected):
-    xml = ET.fromstring(input)
+    xml = etree.fromstring(input)
     s._rewrite_block_to_tei_xml(xml, 42)
-    actual = ET.tostring(xml)
-    assert expected.encode("utf-8") == actual
+    actual = s._to_string(xml)
+    assert expected == actual
 
 
 @pytest.mark.parametrize(
@@ -358,28 +328,34 @@ def test_rewrite_block_to_tei_xml__stage(input, expected):
     ],
 )
 def test_rewrite_block_to_tei_xml__chaya(input, expected):
-    xml = ET.fromstring(input)
+    xml = etree.fromstring(input)
     s._rewrite_block_to_tei_xml(xml, 42)
-    actual = ET.tostring(xml)
-    assert expected.encode("utf-8") == actual
+    actual = s._to_string(xml)
+    assert expected == actual
 
 
 # Doc-level rewriting
 # -------------------------------------------------------------------
 
+
 def _test_create_tei_document(input, expected):
-    """Helper function for testing _create_tei_sections_and_blocks."""
+    """Helper function for testing create_tei_document."""
     pages = []
+    revisions = []
     for i, page_xml in enumerate(input):
-        revision = MockRevision(id=i, page_id=i, content=page_xml)
-        pages.append(MockPage(revisions=[revision]))
+        revision = db.Revision(id=i, page_id=i, content=page_xml)
+        revisions.append(revision)
+        pages.append(
+            db.Page(id=i, slug=str(i), order=i, status_id=1, revisions=[revision])
+        )
 
-    project = MockProject(pages=pages)
-    config = MockConfig()
+    project = db.Project(
+        slug="test", display_title="Test", page_numbers="", pages=pages
+    )
+    config = db.PublishConfig(slug="test", title="Test", target="(and)")
 
-    conversion = s._create_tei_sections_and_blocks(project, config)
-    tei_blocks = conversion.sections[0].blocks
-    assert tei_blocks == expected
+    conversion = s.create_tei_document(project, config, revisions=revisions)
+    assert conversion.items == expected
 
 
 def test_create_tei_document__paragraph():
@@ -506,9 +482,14 @@ def test_create_tei_document__autoincrement_with_div_n():
     _test_create_tei_document(
         ["<page><metadata>div.n=1</metadata><p>a</p><p>b</p><p>c</p></page>"],
         [
-            s.TEIBlock(xml='<p n="1.p1">a</p>', slug="1.p1", page_id=0),
-            s.TEIBlock(xml='<p n="1.p2">b</p>', slug="1.p2", page_id=0),
-            s.TEIBlock(xml='<p n="1.p3">c</p>', slug="1.p3", page_id=0),
+            s.TEISection(
+                slug="1",
+                blocks=[
+                    s.TEIBlock(xml='<p n="1.p1">a</p>', slug="1.p1", page_id=0),
+                    s.TEIBlock(xml='<p n="1.p2">b</p>', slug="1.p2", page_id=0),
+                    s.TEIBlock(xml='<p n="1.p3">c</p>', slug="1.p3", page_id=0),
+                ],
+            )
         ],
     )
 
@@ -517,9 +498,14 @@ def test_create_tei_document__autoincrement_with_dot_prefix():
     _test_create_tei_document(
         ['<page><p n="1.1">a</p><p>b</p><p>c</p></page>'],
         [
-            s.TEIBlock(xml='<p n="1.1">a</p>', slug="1.1", page_id=0),
-            s.TEIBlock(xml='<p n="1.2">b</p>', slug="1.2", page_id=0),
-            s.TEIBlock(xml='<p n="1.3">c</p>', slug="1.3", page_id=0),
+            s.TEISection(
+                slug="1",
+                blocks=[
+                    s.TEIBlock(xml='<p n="1.1">a</p>', slug="1.1", page_id=0),
+                    s.TEIBlock(xml='<p n="1.2">b</p>', slug="1.2", page_id=0),
+                    s.TEIBlock(xml='<p n="1.3">c</p>', slug="1.3", page_id=0),
+                ],
+            )
         ],
     )
 
@@ -560,5 +546,3 @@ def test_create_tei_document__autoincrement_with_mixed_types():
             s.TEIBlock(xml='<p n="p3">c</p>', slug="p3", page_id=1),
         ],
     )
-
-
