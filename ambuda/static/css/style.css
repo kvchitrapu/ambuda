@@ -120,6 +120,11 @@
     @apply text-green-600;
   }
 
+  /* Enhanced sidebar */
+  .dict-results {
+    @apply max-h-64 overflow-y-auto text-sm;
+  }
+
   /* Classes created by Flask-admin */
   .pagination {
     @apply border rounded my-4;
