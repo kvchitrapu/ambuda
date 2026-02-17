@@ -1,4 +1,5 @@
 import dataclasses as dc
+from datetime import datetime, timedelta
 
 from vidyut.lipi import transliterate, Scheme
 
@@ -61,6 +62,18 @@ def create_text_entries() -> list[TextEntry]:
             pass
 
     return text_entries
+
+
+def create_recent_text_entries() -> list[TextEntry]:
+    one_week_ago = datetime.utcnow() - timedelta(weeks=1)
+    all_entries = create_text_entries()
+    recent = [
+        e
+        for e in all_entries
+        if e.text.published_at is not None and e.text.published_at >= one_week_ago
+    ]
+    recent.sort(key=lambda e: e.text.published_at, reverse=True)
+    return recent[:10]
 
 
 def create_grouped_text_entries() -> dict[str, list[TextEntry]]:

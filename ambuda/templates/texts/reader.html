@@ -290,6 +290,62 @@ On wide screens, the sidebar is on the right side of a split view.
       <hr class="mb-4 border-slate-200">
       {% if text_about %}
 
+      {# --- Electronic text (publicationStmt / titleStmt) --- #}
+      <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">{{ _('Electronic Text') }}</h3>
+      <table class="text-sm w-full mb-4">
+        <tbody>
+          {% if text_about.tei_title %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Title') }}</td>
+            <td class="py-1.5">{{ text_about.tei_title }}</td>
+          </tr>
+          {% endif %}
+          {% if text_about.tei_author %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Author') }}</td>
+            <td class="py-1.5">{{ text_about.tei_author }}</td>
+          </tr>
+          {% endif %}
+          {% if text.project %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Project') }}</td>
+            <td class="py-1.5">
+              <a class="text-blue-500 hover:underline" href="{{ url_for('proofing.project.summary', slug=text.project.slug) }}">{{ text.project.display_title }}</a>
+            </td>
+          </tr>
+          {% endif %}
+          {% if text_about.tei_publisher %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Publisher') }}</td>
+            <td class="py-1.5">{{ text_about.tei_publisher }}</td>
+          </tr>
+          {% endif %}
+          {% if text_about.tei_publication_year %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Date') }}</td>
+            <td class="py-1.5">{{ text_about.tei_publication_year }}</td>
+          </tr>
+          {% endif %}
+          {% if text_about.tei_availability %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Availability') }}</td>
+            <td class="py-1.5">{{ text_about.tei_availability | safe }}</td>
+          </tr>
+          {% endif %}
+        </tbody>
+      </table>
+
+      {% if text.tags %}
+      <div class="mb-4">
+        <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">{{ _('Tags') }}</h3>
+        <div class="flex flex-wrap gap-1.5">
+          {% for tag in text.tags %}
+          <span class="inline-block px-2 py-0.5 text-xs rounded-full bg-slate-100 text-slate-600">{{ tag.name }}</span>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
       {# --- Source edition (sourceDesc) --- #}
       <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">{{ _('Source Edition') }}</h3>
       {% if text_about.has_source_info %}
@@ -336,51 +392,6 @@ On wide screens, the sidebar is on the right side of a split view.
       {% else %}
       <p class="text-sm text-slate-400 mb-4">{{ _('Unknown') }}</p>
       {% endif %}
-
-      {# --- Electronic text (publicationStmt / titleStmt) --- #}
-      <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">{{ _('Electronic Text') }}</h3>
-      <table class="text-sm w-full">
-        <tbody>
-          {% if text_about.tei_title %}
-          <tr>
-            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Title') }}</td>
-            <td class="py-1.5">{{ text_about.tei_title }}</td>
-          </tr>
-          {% endif %}
-          {% if text_about.tei_author %}
-          <tr>
-            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Author') }}</td>
-            <td class="py-1.5">{{ text_about.tei_author }}</td>
-          </tr>
-          {% endif %}
-          {% if text.project %}
-          <tr>
-            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Project') }}</td>
-            <td class="py-1.5">
-              <a class="text-blue-500 hover:underline" href="{{ url_for('proofing.project.summary', slug=text.project.slug) }}">{{ text.project.display_title }}</a>
-            </td>
-          </tr>
-          {% endif %}
-          {% if text_about.tei_publisher %}
-          <tr>
-            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Publisher') }}</td>
-            <td class="py-1.5">{{ text_about.tei_publisher }}</td>
-          </tr>
-          {% endif %}
-          {% if text_about.tei_publication_year %}
-          <tr>
-            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Date') }}</td>
-            <td class="py-1.5">{{ text_about.tei_publication_year }}</td>
-          </tr>
-          {% endif %}
-          {% if text_about.tei_availability %}
-          <tr>
-            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Availability') }}</td>
-            <td class="py-1.5">{{ text_about.tei_availability | safe }}</td>
-          </tr>
-          {% endif %}
-        </tbody>
-      </table>
       {% if text.project and text.project.sources %}
       <div class="mt-4">
         <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">{{ _('Project Details') }}</h3>

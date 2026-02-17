@@ -405,6 +405,7 @@ def config(slug):
 
 
 @bp.route("/<project_slug>/publish/<text_slug>/preview", methods=["GET"])
+@p2_required
 def preview(project_slug, text_slug):
     """Preview the changes that will be made when publishing a single text."""
 

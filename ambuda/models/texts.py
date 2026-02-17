@@ -12,7 +12,17 @@ from datetime import UTC, datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, JSON, Table, event
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    JSON,
+    Table,
+    event,
+)
 from sqlalchemy import Text as _Text
 from sqlalchemy import select, exists
 from sqlalchemy.orm import relationship, Mapped, mapped_column, object_session
@@ -33,6 +43,38 @@ class TextStatus(StrEnum):
     P0 = "p0"
     P1 = "p1"
     P2 = "p2"
+
+
+text_tag_association = Table(
+    "text_tag_association",
+    Base.metadata,
+    Column("text_id", Integer, ForeignKey("texts.id"), primary_key=True),
+    Column("tag_id", Integer, ForeignKey("text_tags.id"), primary_key=True),
+    Column("is_featured", Boolean, default=False, nullable=False),
+)
+
+
+class TextTag(Base):
+    """A tag for categorizing texts."""
+
+    __tablename__ = "text_tags"
+
+    #: Primary key.
+    id = pk()
+    #: The tag name.
+    name: Mapped[str] = mapped_column(String, unique=True, nullable=False)
+    #: Optional description.
+    description: Mapped[str | None] = mapped_column(_Text, nullable=True)
+
+    #: Texts associated with this tag.
+    texts = relationship(
+        "Text",
+        secondary=text_tag_association,
+        back_populates="tags",
+    )
+
+    def __str__(self):
+        return self.name
 
 
 class Text(Base):
@@ -92,6 +134,11 @@ class Text(Base):
     parent = relationship("Text", remote_side=[id], backref="children")
     # The exports associated with this text.
     exports = relationship("TextExport", backref="text", cascade="delete")
+    tags = relationship(
+        "TextTag",
+        secondary=text_tag_association,
+        back_populates="texts",
+    )
 
     # DEPRECATED parse data
     block_parses = relationship("BlockParse", backref="text")

@@ -246,6 +246,11 @@ MODEL_CONFIG = [
                 handler=tasks.add_genre_to_texts,
             ),
             Task(
+                name="Edit tags",
+                slug="edit-tags",
+                handler=tasks.edit_tags,
+            ),
+            Task(
                 name="Create exports",
                 slug="create-exports",
                 handler=tasks.create_exports,
@@ -281,6 +286,11 @@ MODEL_CONFIG = [
                 handler=tasks.save_xml_to_disk_cache,
             ),
         ],
+    ),
+    ModelConfig(
+        model=db.TextTag,
+        list_columns=["id", "name"],
+        category=Category.TEXTS,
     ),
     ModelConfig(
         model=db.Thread,

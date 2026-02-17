@@ -96,6 +96,27 @@
 
 {# Text listing #}
 <article id="library" class="px-6 md:px-8 mx-auto max-w-5xl pb-16 md:pb-24">
+
+  {% if recent_texts %}
+  <section class="bg-slate-100 mb-16 border rounded mt-16 p-4">
+    <h2 class="mb-4 font-bold text-slate-500">{{ _('New texts') }}</h2>
+    <ul class="divide-y divide-slate-200">
+      {% for entry in recent_texts %}
+      <li>
+        <h2 class="flex justify-between items-baseline text-sm">
+          <span>
+            <a href="{{ url_for('texts.text', slug=entry.text.slug) }}" class="hover:underline">
+              {{- entry.text.title | hk_to_user_script | devanagari_to_user_script -}}
+            </a>
+          </span>
+          <span class="text-xs text-slate-400">{{ entry.text.published_at.strftime('%Y-%m-%d') }}</span>
+        </h2>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
   {{ m.grouped_texts(grouped_entries) }}
 </article>
 

@@ -13,7 +13,10 @@ bp = Blueprint("site", __name__)
 @bp.route("/")
 def index():
     grouped_entries = text_utils.create_grouped_text_entries()
-    return render_template("index.html", grouped_entries=grouped_entries)
+    recent_texts = text_utils.create_recent_text_entries()
+    return render_template(
+        "index.html", grouped_entries=grouped_entries, recent_texts=recent_texts
+    )
 
 
 @bp.route("/contact")
