@@ -124,6 +124,10 @@ export default () => ({
   dictQuery: '',
   // If true, show the dictionary selection widget.
   showDictSourceSelector: false,
+  // If true, show the anvaya (prose order) view
+  showAnvaya: false,
+  // If true, show English gloss in anvaya view
+  showAnvayaGloss: false,
 
   init() {
     this.loadSettings();
