@@ -16,6 +16,7 @@ from vidyut.lipi import transliterate, Scheme
 
 import ambuda.database as db
 import ambuda.queries as q
+from ambuda.consts import SINGLE_SECTION_SLUG
 from ambuda.models.texts import TextConfig
 from ambuda.utils import text_utils
 from ambuda.utils import xml
@@ -26,13 +27,6 @@ from ambuda.utils.s3 import S3Path
 from sqlalchemy import exists, orm, select
 
 bp = Blueprint("texts", __name__)
-
-#: A special slug for single-section texts.
-#:
-#: Some texts are small enough that they don't have any divisions (sargas,
-#: kandas). For simplicity, we represent such texts as having one section that
-#: we just call "all." All such texts are called *single-section texts.*
-SINGLE_SECTION_SLUG = "all"
 
 
 def _prev_cur_next(sections: list[db.TextSection], slug: str):

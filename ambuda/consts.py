@@ -7,6 +7,14 @@ are more locally scoped should be defined in the modules that use them.
 from dataclasses import dataclass
 
 
+#: A special slug for single-section texts.
+#:
+#: Some texts are small enough that they don't have any divisions (sargas,
+#: kandas). For simplicity, we represent such texts as having one section that
+#: we just call "all." All such texts are called *single-section texts.*
+SINGLE_SECTION_SLUG = "all"
+
+
 @dataclass
 class Locale:
     """Represents a locale option that we expose to users.

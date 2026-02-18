@@ -12,6 +12,7 @@ from typing import Iterable
 from sqlalchemy import select, func
 
 from ambuda import database as db
+from ambuda.consts import SINGLE_SECTION_SLUG
 from ambuda.utils.project_structuring import ProofPage
 from ambuda.utils import project_utils
 from ambuda import queries as q
@@ -513,10 +514,7 @@ def _create_tei_sections_and_blocks(
     if revisions is None:
         session = q.get_session()
         subq = (
-            select(
-                db.Revision.page_id,
-                func.max(db.Revision.created_at).label("max_created"),
-            )
+            select(db.Revision.page_id, func.max(db.Revision.id).label("max_id"))
             .where(db.Revision.project_id == project.id)
             .group_by(db.Revision.page_id)
             .subquery()
@@ -524,13 +522,8 @@ def _create_tei_sections_and_blocks(
         revisions = (
             session.execute(
                 select(db.Revision)
-                .join(
-                    subq,
-                    (db.Revision.page_id == subq.c.page_id)
-                    & (db.Revision.created_at == subq.c.max_created),
-                )
-                .join(db.Page, db.Revision.page_id == db.Page.id)
-                .order_by(db.Page.order)
+                .join(subq, db.Revision.id == subq.c.max_id)
+                .order_by(db.Revision.page_id)
             )
             .scalars()
             .all()
@@ -754,10 +747,6 @@ def _create_tei_sections_and_blocks(
     )
 
 
-# CLAUDE: implement a wrapper for etree.xmlfile that is depth-aware and indents XML according to its
-# depth in the tree. The API should be similar so that we can have a drop-in replacement.
-
-
 def create_tei_document(
     project: db.Project,
     config: db.PublishConfig,
@@ -920,7 +909,7 @@ def parse_tei_document(xml_path: Path) -> TEIDocument:
 
             block_xml = _to_string(elem).strip()
             section_n, _, block_n = n.rpartition(".")
-            section_n = section_n or "all"
+            section_n = section_n or SINGLE_SECTION_SLUG
             section_map.setdefault(section_n, []).append(
                 TEIBlock(xml=block_xml, slug=n, page_id=0)
             )

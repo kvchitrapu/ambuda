@@ -25,7 +25,8 @@ from werkzeug.exceptions import abort
 from werkzeug.utils import redirect
 
 import ambuda.utils.text_publishing as publishing_utils
-from ambuda.utils.text_publishing import Filter, TEISection
+from ambuda.consts import SINGLE_SECTION_SLUG
+from ambuda.utils.text_publishing import Filter, TEIBlock, TEISection
 from ambuda import database as db
 from ambuda import queries as q
 from ambuda.enums import SitePageStatus
@@ -500,6 +501,8 @@ def create(project_slug, text_slug):
         fp.close()
         tei_path = Path(fp.name)
         document_data = publishing_utils.create_tei_document(project_, config, tei_path)
+
+        # Extract TEI header
         header = ""
         _ns = "{http://www.tei-c.org/ns/1.0}"
         for event, elem in etree.iterparse(fp.name, events=("end",)):
@@ -512,6 +515,7 @@ def create(project_slug, text_slug):
 
     task_dispatched = False
     try:
+        # Create/update `text`
         text = q.text(config.slug)
         is_new_text = False
         if not text:
@@ -524,12 +528,12 @@ def create(project_slug, text_slug):
             session.add(text)
             session.flush()
             is_new_text = True
-
         text.header = header
         text.project_id = project_.id
         text.language = config.language
         text.title = config.title
 
+        # Set author, and create it as needed.
         if config.author:
             author = session.execute(
                 sqla.select(db.Author).where(db.Author.name == config.author)
@@ -542,6 +546,7 @@ def create(project_slug, text_slug):
         else:
             text.author_id = None
 
+        # Set genre, and create it as needed.
         if config.genre:
             genre = session.execute(
                 sqla.select(db.Genre).where(db.Genre.name == config.genre)
@@ -554,6 +559,9 @@ def create(project_slug, text_slug):
         else:
             text.genre_id = None
 
+        # Set an overall quality score for the text based on the quality of its source pages.
+        #
+        # TODO: make status more granular
         if SitePageStatus.R0.value in document_data.page_statuses:
             text.status = TextStatus.P0
         elif SitePageStatus.R1.value in document_data.page_statuses:
@@ -561,8 +569,19 @@ def create(project_slug, text_slug):
         else:
             text.status = TextStatus.P2
 
+        # Create/update new blocks as necessary.
+        #
+        # NOTE: this must be done very carefully to avoid thrash during updates.
         existing_section_slugs = {s.slug for s in text.sections}
         doc_sections = [s for s in document_data.items if isinstance(s, TEISection)]
+        if not doc_sections:
+            # For texts without section,s create "all" section to hold all blocks
+            doc_sections = [
+                TEISection(
+                    slug=SINGLE_SECTION_SLUG,
+                    blocks=[x for x in document_data.items if isinstance(x, TEIBlock)],
+                )
+            ]
         doc_section_slugs = {s.slug for s in doc_sections}
         section_map = {s.slug: s for s in text.sections}
 
@@ -653,6 +672,7 @@ def create(project_slug, text_slug):
 
         session.flush()
 
+        # Special logic for translations and commentaries
         if config.parent_slug:
             text = texts_map[config.slug]
             parent_text = texts_map.get(config.parent_slug) or q.text(
@@ -660,9 +680,7 @@ def create(project_slug, text_slug):
             )
             if parent_text:
                 text.parent_id = parent_text.id
-
         session.flush()
-
         if config.parent_slug:
             text = texts_map[config.slug]
             parent_text = texts_map.get(config.parent_slug) or q.text(
@@ -710,6 +728,7 @@ def create(project_slug, text_slug):
 
         session.commit()
 
+        # Upload the XML of this file to S3.
         upload_xml_export.apply_async(
             args=(
                 text.id,
@@ -722,9 +741,9 @@ def create(project_slug, text_slug):
         task_dispatched = True
 
         if created_count > 0:
-            flash(f"Created {created_count} text(s)", "success")
+            flash(f"Created text '{text.slug}'.", "success")
         if updated_count > 0:
-            flash(f"Updated {updated_count} text(s)", "success")
+            flash(f"Updated text '{text.slug}'.", "success")
 
         return redirect(url_for("proofing.publish.config", slug=project_slug))
     finally:

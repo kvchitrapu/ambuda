@@ -188,11 +188,11 @@ def create_app(config_env: str):
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
             "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://plausible.io https://cdn.jsdelivr.net https://unpkg.com https://donorbox.org https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/; "
-            "style-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
             "img-src 'self' data: https: ; "
             "frame-src https://donorbox.org https://www.google.com/recaptcha/; "
             "connect-src 'self' https://plausible.io; "
-            "font-src 'self'; "
+            "font-src 'self' https://fonts.gstatic.com; "
             "object-src 'none'; "
             "base-uri 'self'"
         )
