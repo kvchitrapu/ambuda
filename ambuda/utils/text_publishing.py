@@ -523,7 +523,8 @@ def _create_tei_sections_and_blocks(
             session.execute(
                 select(db.Revision)
                 .join(subq, db.Revision.id == subq.c.max_id)
-                .order_by(db.Revision.page_id)
+                .join(db.Page, db.Revision.page_id == db.Page.id)
+                .order_by(db.Page.order)
             )
             .scalars()
             .all()
@@ -531,6 +532,10 @@ def _create_tei_sections_and_blocks(
 
     rules = project_utils.parse_page_number_spec(project.page_numbers)
     page_numbers = project_utils.apply_rules(len(project.pages), rules)
+
+    # Map page_id -> 1-based image number (visual position) so that
+    # pages with no revisions don't shift subsequent image numbers.
+    page_id_to_image_number = {page.id: i + 1 for i, page in enumerate(project.pages)}
 
     target = config.target or ""
     if target.startswith("("):
@@ -542,8 +547,10 @@ def _create_tei_sections_and_blocks(
 
     def _iter_blocks(revisions) -> Iterable[IndexedBlock]:
         """Iterate over all blocks in the given revisions."""
-        for i, revision in enumerate(revisions):
-            image_number = i + 1
+        for revision in revisions:
+            image_number = page_id_to_image_number.get(revision.page_id)
+            if image_number is None:
+                continue
             if img_range and (
                 image_number < img_range[0] or image_number > img_range[1]
             ):

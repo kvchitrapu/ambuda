@@ -358,6 +358,73 @@ def _test_create_tei_document(input, expected):
     assert conversion.items == expected
 
 
+def test_create_tei_document__page_order_differs_from_page_id():
+    """image_number must follow Page.order, not Page.id.
+
+    Pages:
+      page_id=10, order=2  (visual position 3) -> content "a"
+      page_id=20, order=0  (visual position 1) -> content "b"
+      page_id=30, order=1  (visual position 2) -> content "c"
+
+    Revisions are passed in page_id order (simulating the old query).
+    Filter selects image 1, which should be page_id=20 ("b", order=0).
+
+    Before the fix, enumerate gave r(pid=10) image_number=1, selecting "a".
+    """
+    r0 = db.Revision(id=0, page_id=10, content='<page><p n="1">a</p></page>')
+    r1 = db.Revision(id=1, page_id=20, content='<page><p n="2">b</p></page>')
+    r2 = db.Revision(id=2, page_id=30, content='<page><p n="3">c</p></page>')
+
+    pages = [
+        db.Page(id=20, slug="2", order=0, status_id=1, revisions=[r1]),
+        db.Page(id=30, slug="3", order=1, status_id=1, revisions=[r2]),
+        db.Page(id=10, slug="1", order=2, status_id=1, revisions=[r0]),
+    ]
+
+    project = db.Project(
+        slug="test", display_title="Test", page_numbers="", pages=pages
+    )
+    # Select image 1 = visual position 1 = page_id=20 (order=0) = "b"
+    config = db.PublishConfig(slug="test", title="Test", target="(image 1)")
+
+    conversion = s.create_tei_document(
+        project,
+        config,
+        revisions=[r0, r1, r2],  # page_id order (old query)
+    )
+    assert conversion.items == [
+        s.TEIBlock(xml='<p n="2">b</p>', slug="2", page_id=20),
+    ]
+
+
+def test_create_tei_document__pages_without_revisions_do_not_shift_image_numbers():
+    """Pages with no revisions must not shift image numbers for later pages.
+
+    3 pages in visual order, but only pages 1 and 3 have revisions.
+    Page 2 (image 2) has no revision and should be skipped without
+    shifting page 3 from image 3 to image 2.
+    """
+    r0 = db.Revision(id=0, page_id=0, content='<page><p n="1">a</p></page>')
+    r2 = db.Revision(id=2, page_id=2, content='<page><p n="2">c</p></page>')
+
+    pages = [
+        db.Page(id=0, slug="1", order=0, status_id=1, revisions=[r0]),
+        db.Page(id=1, slug="2", order=1, status_id=1, revisions=[]),  # no revision
+        db.Page(id=2, slug="3", order=2, status_id=1, revisions=[r2]),
+    ]
+
+    project = db.Project(
+        slug="test", display_title="Test", page_numbers="", pages=pages
+    )
+    # Select only image 3 — should match page_id=2 ("c"), not be shifted to image 2.
+    config = db.PublishConfig(slug="test", title="Test", target="(image 3)")
+
+    conversion = s.create_tei_document(project, config, revisions=[r0, r2])
+    assert conversion.items == [
+        s.TEIBlock(xml='<p n="2">c</p>', slug="2", page_id=2),
+    ]
+
+
 def test_create_tei_document__paragraph():
     _test_create_tei_document(
         ['<page><p n="1">अ</p></page>'],
