@@ -278,3 +278,55 @@ test('copyCharacter writes to clipboard', () => {
   p.copyCharacter({ target: { textContent: 'ऽ' } });
   expect(navigator.clipboard.writeText).toHaveBeenCalledWith('ऽ');
 });
+
+// -- IME --
+
+test('imeEnabled defaults to false', () => {
+  const p = Proofer();
+  expect(p.imeEnabled).toBe(false);
+});
+
+test('toggleIME flips imeEnabled and saves settings', () => {
+  const p = Proofer();
+  expect(p.imeEnabled).toBe(false);
+
+  p.toggleIME();
+  expect(p.imeEnabled).toBe(true);
+
+  p.toggleIME();
+  expect(p.imeEnabled).toBe(false);
+});
+
+test('imeEnabled persists in settings', () => {
+  const p = Proofer();
+  p.imeEnabled = true;
+  p.saveSettings();
+
+  const p2 = Proofer();
+  p2.loadSettings();
+  expect(p2.imeEnabled).toBe(true);
+});
+
+test('imeEnabled defaults to false when not in saved settings', () => {
+  localStorage.setItem('proofing-editor', '{}');
+  const p = Proofer();
+  p.loadSettings();
+  expect(p.imeEnabled).toBe(false);
+});
+
+test('getCommands includes Transliterator IME', () => {
+  const p = Proofer();
+  const commands = p.getCommands();
+  const imeCmd = commands.find(c => c.label === 'Tools > Transliterator IME');
+  expect(imeCmd).toBeDefined();
+});
+
+test('Transliterator IME command calls toggleIME', () => {
+  const p = Proofer();
+  const commands = p.getCommands();
+  const imeCmd = commands.find(c => c.label === 'Tools > Transliterator IME');
+
+  expect(p.imeEnabled).toBe(false);
+  imeCmd.action();
+  expect(p.imeEnabled).toBe(true);
+});

@@ -165,12 +165,13 @@ function activeWordPlugin(
   });
 }
 
-// IME plugin for live transliteration input
 type IMEConfig = { enabled: boolean; fromScript: string; toScript: string };
 
 function imePlugin(getConfig: () => IMEConfig) {
   let buffer = '';
+  let bufferStart = -1;
   let popup: HTMLDivElement | null = null;
+  let dispatching = false;
 
   function ensurePopup(): HTMLDivElement {
     if (!popup) {
@@ -194,31 +195,74 @@ function imePlugin(getConfig: () => IMEConfig) {
     el.textContent = transliterated;
     el.style.display = '';
 
-    const coords = view.coordsAtPos(view.state.selection.from);
-    el.style.left = `${coords.left}px`;
-    el.style.top = `${coords.bottom + 4}px`;
+    try {
+      const coords = view.coordsAtPos(view.state.selection.from);
+      el.style.left = `${coords.left}px`;
+      el.style.top = `${coords.bottom + 4}px`;
+    } catch {
+      // coordsAtPos can fail if DOM layout is unavailable
+    }
+  }
+
+  function hidePopup() {
+    ensurePopup().style.display = 'none';
   }
 
   function commitBuffer(view: EditorView, suffix: string = '') {
     if (!buffer) return;
+    dispatching = true;
     const config = getConfig();
     const text = (window as any).Sanscript.t(buffer, config.fromScript, config.toScript) + suffix;
-    const { from } = view.state.selection;
-    view.dispatch(view.state.tr.insertText(text, from, from));
+    const bufferEnd = bufferStart + buffer.length;
+    view.dispatch(view.state.tr.insertText(text, bufferStart, bufferEnd));
     buffer = '';
-    ensurePopup().style.display = 'none';
+    bufferStart = -1;
+    hidePopup();
+    dispatching = false;
+  }
+
+  function discardBuffer(view: EditorView) {
+    if (!buffer) return;
+    dispatching = true;
+    const bufferEnd = bufferStart + buffer.length;
+    view.dispatch(view.state.tr.delete(bufferStart, bufferEnd));
+    buffer = '';
+    bufferStart = -1;
+    hidePopup();
+    dispatching = false;
   }
 
   return new Plugin({
+    view() {
+      return {
+        update(view: EditorView, prevState: EditorState) {
+          // Commit if selection moved outside buffer (e.g. mouse click)
+          if (buffer && !dispatching && !view.state.selection.eq(prevState.selection)) {
+            const { from } = view.state.selection;
+            if (from < bufferStart || from > bufferStart + buffer.length) {
+              commitBuffer(view);
+            }
+          }
+        },
+        destroy() {
+          if (popup && popup.parentNode) {
+            popup.parentNode.removeChild(popup);
+            popup = null;
+          }
+        },
+      };
+    },
     props: {
       handleKeyDown(view: EditorView, event: KeyboardEvent) {
         const config = getConfig();
         if (!config.enabled) return false;
 
+        const { from } = view.state.selection;
+        const bufferEnd = bufferStart + buffer.length;
+
         if (event.key === 'Escape') {
           if (buffer) {
-            buffer = '';
-            ensurePopup().style.display = 'none';
+            discardBuffer(view);
             return true;
           }
           return false;
@@ -242,33 +286,68 @@ function imePlugin(getConfig: () => IMEConfig) {
 
         if (event.key === 'Backspace') {
           if (buffer) {
-            buffer = buffer.slice(0, -1);
-            updatePopup(view);
+            const offset = from - bufferStart;
+            if (offset <= 0) {
+              commitBuffer(view);
+              return false;
+            }
+            dispatching = true;
+            view.dispatch(view.state.tr.delete(from - 1, from));
+            dispatching = false;
+            buffer = buffer.slice(0, offset - 1) + buffer.slice(offset);
+            if (!buffer) {
+              bufferStart = -1;
+              hidePopup();
+            } else {
+              updatePopup(view);
+            }
             return true;
           }
           return false;
         }
 
-        // Printable character (single char, no modifier)
+        if (event.key === 'ArrowLeft') {
+          if (buffer) {
+            if (from > bufferStart) return false;
+            commitBuffer(view);
+          }
+          return false;
+        }
+
+        if (event.key === 'ArrowRight') {
+          if (buffer) {
+            if (from < bufferEnd) return false;
+            commitBuffer(view);
+          }
+          return false;
+        }
+
         if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
           event.preventDefault();
-          buffer += event.key;
+          dispatching = true;
+          if (!buffer) {
+            bufferStart = from;
+            view.dispatch(view.state.tr.insertText(event.key, from, from));
+            buffer = event.key;
+          } else {
+            const offset = from - bufferStart;
+            view.dispatch(view.state.tr.insertText(event.key, from, from));
+            buffer = buffer.slice(0, offset) + event.key + buffer.slice(offset);
+          }
+          dispatching = false;
           updatePopup(view);
           return true;
         }
 
-        // Other keys (arrows, Tab, etc.): commit buffer first, then pass through
+        if (['Shift', 'Control', 'Alt', 'Meta', 'CapsLock'].includes(event.key)) {
+          return false;
+        }
+
         if (buffer) {
           commitBuffer(view);
         }
         return false;
       },
-    },
-    destroy() {
-      if (popup && popup.parentNode) {
-        popup.parentNode.removeChild(popup);
-        popup = null;
-      }
     },
   });
 }

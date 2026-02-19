@@ -207,7 +207,6 @@ export default () => ({
   toScript: 'devanagari',
   // If true, show advanced options (text, n, and merge_next)
   showAdvancedOptions: false,
-  // If true, enable IME transliteration mode
   imeEnabled: false,
   showMarkToolbar: false,
   inlineMarks: INLINE_MARKS,
