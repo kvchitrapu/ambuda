@@ -8,7 +8,7 @@
   <div class="flex items-center justify-between mb-6">
     <div>
       <h1 class="text-3xl font-bold text-slate-800">{{ model_name }}</h1>
-      <p class="text-slate-600 mt-1">{{ total }} total records</p>
+      <p class="text-slate-600 mt-1" id="record-count">{{ total }} total records</p>
     </div>
     <div class="flex gap-2">
       {% if tasks %}
@@ -35,87 +35,27 @@
 
   {{ flash_messages() }}
 
-  <div class="bg-white rounded-lg border border-slate-200 overflow-hidden">
-    <div class="overflow-x-auto">
-      <table class="w-full">
-        <thead class="bg-slate-50 border-b border-slate-200">
-          <tr>
-            <th class="px-4 py-3 text-left w-12">
-              <input type="checkbox" id="select-all" class="rounded" form="batch-form">
-            </th>
-            {% for column in list_columns %}
-            <th class="px-4 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">
-              {{ column }}
-            </th>
-            {% endfor %}
-            <th class="px-4 py-3 text-right text-xs font-semibold text-slate-600 uppercase tracking-wider">
-              Actions
-            </th>
-          </tr>
-        </thead>
-        <tbody class="divide-y divide-slate-200">
-          {% for item in items %}
-          <tr class="hover:bg-slate-50 transition">
-            <td class="px-4 py-3">
-              <input type="checkbox" name="selected_ids" value="{{ item.id }}" class="rounded row-checkbox" form="batch-form">
-            </td>
-            {% for column in list_columns %}
-            <td class="px-4 py-3 text-sm text-slate-700">
-              {% set value = item[column] %}
-              {% if value is none %}
-                <span class="text-slate-400">null</span>
-              {% elif column in fk_map %}
-                {% set label = fk_labels.get(column, {}).get(value, value) %}
-                <a href="{{ url_for('admin.edit_model', model_name=fk_map[column], item_id=value) }}"
-                   class="text-sky-600 hover:text-sky-800 underline">
-                  {{ label }}
-                </a>
-              {% elif value is string and value|length > 100 %}
-                {{ value[:100] }}...
-              {% else %}
-                {{ value }}
-              {% endif %}
-            </td>
-            {% endfor %}
-            <td class="px-4 py-3 text-sm text-right">
-              <a href="{{ url_for('admin.edit_model', model_name=current_model, item_id=item.id) }}"
-                 class="text-sky-600 hover:text-sky-800">Edit</a>
-            </td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
+  {% if search_key %}
+  <div class="mb-4">
+    <input type="text"
+           id="admin-search"
+           value="{{ search }}"
+           placeholder="Search by {{ search_key }}..."
+           class="w-full max-w-sm px-3 py-2 border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-sky-500 text-sm">
+  </div>
+  {% endif %}
 
-    {% if total_pages > 1 %}
-    <div class="px-4 py-3 border-t border-slate-200 flex items-center justify-between">
-      <div class="text-sm text-slate-600">
-        Page {{ page }} of {{ total_pages }}
-      </div>
-      <div class="flex gap-2">
-        {% if page > 1 %}
-        <a href="{{ url_for('admin.list_model', model_name=model_name, page=page-1) }}"
-           class="px-3 py-1 border border-slate-300 rounded hover:bg-slate-50 text-sm">
-          Previous
-        </a>
-        {% endif %}
-        {% if page < total_pages %}
-        <a href="{{ url_for('admin.list_model', model_name=model_name, page=page+1) }}"
-           class="px-3 py-1 border border-slate-300 rounded hover:bg-slate-50 text-sm">
-          Next
-        </a>
-        {% endif %}
-      </div>
-    </div>
-    {% endif %}
+  <div id="table-container">
+    {% include "admin/list_table.html" %}
   </div>
 </div>
 
 <script>
-  // select all
-  document.getElementById('select-all')?.addEventListener('change', function(e) {
-    const checkboxes = document.querySelectorAll('.row-checkbox');
-    checkboxes.forEach(cb => cb.checked = e.target.checked);
+  document.getElementById('table-container').addEventListener('change', function(e) {
+    if (e.target.id === 'select-all') {
+      const checkboxes = document.querySelectorAll('.row-checkbox');
+      checkboxes.forEach(cb => cb.checked = e.target.checked);
+    }
   });
 
   document.getElementById('batch-form')?.addEventListener('submit', function(e) {
@@ -127,5 +67,40 @@
     }
     this.action = "{{ url_for('admin.run_task', model_name=current_model, task_slug='__TASK__') }}".replace('__TASK__', taskSlug);
   });
+
+  (function() {
+    const searchInput = document.getElementById('admin-search');
+    if (!searchInput) return;
+
+    const tableContainer = document.getElementById('table-container');
+    const recordCount = document.getElementById('record-count');
+    let timer = null;
+
+    searchInput.addEventListener('input', function() {
+      clearTimeout(timer);
+      timer = setTimeout(function() {
+        const params = new URLSearchParams(window.location.search);
+        const value = searchInput.value.trim();
+        if (value) {
+          params.set('search', value);
+        } else {
+          params.delete('search');
+        }
+        params.delete('page');
+        params.set('partial', '1');
+
+        fetch(window.location.pathname + '?' + params.toString())
+          .then(function(res) { return res.json(); })
+          .then(function(data) {
+            tableContainer.innerHTML = data.html;
+            recordCount.textContent = data.total + ' total records';
+
+            params.delete('partial');
+            const newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
+            history.replaceState(null, '', newUrl);
+          });
+      }, 300);
+    });
+  })();
 </script>
 {% endblock %}

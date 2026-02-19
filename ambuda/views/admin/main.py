@@ -12,6 +12,7 @@ from flask import (
     redirect,
     url_for,
     flash,
+    jsonify,
 )
 from flask_login import current_user
 from flask_wtf import FlaskForm
@@ -86,6 +87,7 @@ class ModelConfig:
     display_field: str | None = None
     #: Enum classes for string fields (e.g., {'status': TextStatus})
     enum_fields: dict[str, type] = field(default_factory=dict)
+    search_key: str | None = None
 
 
 MODEL_CONFIG = [
@@ -130,12 +132,14 @@ MODEL_CONFIG = [
             ),
         ],
         display_field="slug",
+        search_key="slug",
     ),
     ModelConfig(
         model=db.DictionaryEntry,
         list_columns=["id", "dictionary_id", "key"],
         category=Category.DICTIONARIES,
         read_only=True,
+        search_key="key",
     ),
     ModelConfig(
         model=db.Genre,
@@ -190,6 +194,7 @@ MODEL_CONFIG = [
         ],
         display_field="slug",
         enum_fields={"status": ProjectStatus},
+        search_key="slug",
     ),
     ModelConfig(
         model=db.ProjectSponsorship,
@@ -258,6 +263,7 @@ MODEL_CONFIG = [
         ],
         display_field="slug",
         enum_fields={"status": TextStatus},
+        search_key="slug",
     ),
     ModelConfig(
         model=db.TextBlock,
@@ -286,6 +292,7 @@ MODEL_CONFIG = [
                 handler=tasks.save_xml_to_disk_cache,
             ),
         ],
+        search_key="slug",
     ),
     ModelConfig(
         model=db.TextTag,
@@ -321,10 +328,26 @@ MODEL_CONFIG = [
         list_columns=["id", "username", "email", "created_at"],
         category=Category.AUTH,
         display_field="username",
+        search_key="username",
     ),
 ]
 
 MODELS = sorted([config.model.__name__ for config in MODEL_CONFIG])
+
+
+def get_indexed_columns(model_class):
+    inspector = inspect(model_class)
+    indexed = set()
+    for column in inspector.columns:
+        if column.primary_key or column.index or column.unique:
+            indexed.add(column.name)
+        elif column.foreign_keys:
+            indexed.add(column.name)
+    if hasattr(model_class, "__table__"):
+        for idx in model_class.__table__.indexes:
+            if len(idx.columns) == 1:
+                indexed.add(list(idx.columns)[0].name)
+    return indexed
 
 
 def get_foreign_key_info(model_class):
@@ -594,10 +617,25 @@ def list_model(model_name):
     tasks = config.tasks
 
     page = request.args.get("page", 1, type=int)
+    sort = request.args.get("sort", "")
+    sort_dir = request.args.get("sort_dir", "")
+    search = request.args.get("search", "").strip()
     per_page = 50
+
+    indexed_columns = get_indexed_columns(model_class)
 
     session = q.get_session()
     query = session.query(model_class)
+
+    if search and config.search_key:
+        search_col = getattr(model_class, config.search_key, None)
+        if search_col is not None:
+            query = query.filter(search_col.ilike(f"{search}%"))
+
+    if sort and sort_dir in ("asc", "desc") and sort in indexed_columns:
+        col = getattr(model_class, sort, None)
+        if col is not None:
+            query = query.order_by(col.asc() if sort_dir == "asc" else col.desc())
 
     total = query.count()
     items = query.limit(per_page).offset((page - 1) * per_page).all()
@@ -641,8 +679,7 @@ def list_model(model_name):
             for col in fk_columns:
                 fk_labels[col] = label_map
 
-    return render_template(
-        "admin/list.html",
+    template_vars = dict(
         model_name=model_name,
         models=MODELS,
         current_model=model_name,
@@ -656,9 +693,20 @@ def list_model(model_name):
         fk_labels=fk_labels,
         tasks=tasks,
         read_only=config.read_only,
+        indexed_columns=indexed_columns,
+        sort=sort,
+        sort_dir=sort_dir,
+        search=search,
+        search_key=config.search_key,
         model_configs={c.model.__name__: c for c in MODEL_CONFIG},
         models_by_category=get_models_by_category(),
     )
+
+    if request.args.get("partial"):
+        html = render_template("admin/list_table.html", **template_vars)
+        return jsonify(html=html, total=total)
+
+    return render_template("admin/list.html", **template_vars)
 
 
 @bp.route("/<model_name>/create", methods=["GET", "POST"])

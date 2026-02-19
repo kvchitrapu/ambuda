@@ -1,3 +1,27 @@
+{% macro pagination(model_name, page, total_pages, sort='', sort_dir='', search='') %}
+  {% if total_pages > 1 %}
+  <div class="px-4 py-3 flex items-center justify-between">
+    <div class="text-sm text-slate-600">
+      Page {{ page }} of {{ total_pages }}
+    </div>
+    <div class="flex gap-2">
+      {% if page > 1 %}
+      <a href="{{ url_for('admin.list_model', model_name=model_name, page=page-1, sort=sort, sort_dir=sort_dir, search=search) }}"
+         class="px-3 py-1 border border-slate-300 rounded hover:bg-slate-50 text-sm">
+        Previous
+      </a>
+      {% endif %}
+      {% if page < total_pages %}
+      <a href="{{ url_for('admin.list_model', model_name=model_name, page=page+1, sort=sort, sort_dir=sort_dir, search=search) }}"
+         class="px-3 py-1 border border-slate-300 rounded hover:bg-slate-50 text-sm">
+        Next
+      </a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+{% endmacro %}
+
 {#- Flash message display macro -#}
 {% macro flash_messages() %}
   {% with messages = get_flashed_messages(with_categories=true) %}
