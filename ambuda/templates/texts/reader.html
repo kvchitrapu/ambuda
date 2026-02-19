@@ -710,7 +710,7 @@ On wide screens, the sidebar is on the right side of a split view.
 {# Serialize the data above so we can use it without a second network call. #}
 <script id="payload" type="application/json">{{ json_payload|safe }}</script>
 
-<article lang="sa" class="flex h-[calc(100vh-3rem)] mt-12" x-data="reader" @click="onClick" data-script="{{ session.get('script', 'Devanagari') }}">
+<article lang="sa" class="flex h-[calc(100vh-3rem)] mt-12" x-cloak x-data="reader" @click="onClick" data-script="{{ session.get('script', 'Devanagari') }}">
   <div class="flex-1 min-h-0 overflow-y-auto">
   <div class="mx-auto px-4 pb-40 w-full"
       :class="textWidth">
