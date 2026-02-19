@@ -83,7 +83,9 @@ export default () => ({
   grammarDetailResponse: null,
   // Analysis of a word clicked by the user.
   wordAnalysis: { form: null, lemma: null, parse: null },
-  analyzeData: { blockSlug: null, words: [], error: null, loading: false },
+  analyzeData: {
+    blockSlug: null, words: [], error: null, loading: false,
+  },
   // Active sub-tab within the word-detail view ('meaning' or 'grammar').
   wordDetailTab: 'meaning',
 
@@ -149,7 +151,9 @@ export default () => ({
 
     this.dictionaryResponse = null;
     this.wordAnalysis = { form: null, lemma: null, parse: null };
-    this.analyzeData = { blockSlug: null, words: [], error: null, loading: false };
+    this.analyzeData = {
+      blockSlug: null, words: [], error: null, loading: false,
+    };
 
     const resp = await fetch(`/api${window.location.pathname}`);
     if (!resp.ok) return;
@@ -327,7 +331,9 @@ export default () => ({
     }
 
     // Show sidebar immediately with loading state
-    this.analyzeData = { blockSlug, words: [], error: null, loading: true };
+    this.analyzeData = {
+      blockSlug, words: [], error: null, loading: true,
+    };
     this.sidebarTab = 'analyze';
     this.showSidebar = true;
 

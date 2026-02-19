@@ -10,12 +10,36 @@ function toHK(str) {
 }
 
 const DIACRITICS = {
-  ś: 'sh', Ś: 'Sh', ṣ: 'sh', Ṣ: 'Sh',
-  ā: 'a', Ā: 'A', ī: 'i', Ī: 'I', ū: 'u', Ū: 'U',
-  ṛ: 'r', Ṛ: 'R', ṝ: 'r', Ṝ: 'R',
-  ñ: 'n', Ñ: 'N', ṅ: 'n', Ṅ: 'N', ṇ: 'n', Ṇ: 'N',
-  ṃ: 'm', Ṃ: 'M', ḥ: 'h', Ḥ: 'H',
-  ṭ: 't', Ṭ: 'T', ḍ: 'd', Ḍ: 'D', ḷ: 'l', Ḷ: 'L',
+  ś: 'sh',
+  Ś: 'Sh',
+  ṣ: 'sh',
+  Ṣ: 'Sh',
+  ā: 'a',
+  Ā: 'A',
+  ī: 'i',
+  Ī: 'I',
+  ū: 'u',
+  Ū: 'U',
+  ṛ: 'r',
+  Ṛ: 'R',
+  ṝ: 'r',
+  Ṝ: 'R',
+  ñ: 'n',
+  Ñ: 'N',
+  ṅ: 'n',
+  Ṅ: 'N',
+  ṇ: 'n',
+  Ṇ: 'N',
+  ṃ: 'm',
+  Ṃ: 'M',
+  ḥ: 'h',
+  Ḥ: 'H',
+  ṭ: 't',
+  Ṭ: 'T',
+  ḍ: 'd',
+  Ḍ: 'D',
+  ḷ: 'l',
+  Ḷ: 'L',
 };
 
 const DIACRITICS_RE = new RegExp(`[${Object.keys(DIACRITICS).join('')}]`, 'g');
@@ -255,12 +279,12 @@ export default () => ({
   // -- Auto-slug --
 
   onTitleInput(entry) {
-    if (entry._slugManual) return;
+    if (entry.slugManual) return;
     entry.slug = titleToSlug(entry.title);
   },
 
   onSlugInput(entry) {
-    entry._slugManual = true;
+    entry.slugManual = true;
   },
 
   // -- Slug validation --

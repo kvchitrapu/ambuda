@@ -165,6 +165,114 @@ function activeWordPlugin(
   });
 }
 
+// IME plugin for live transliteration input
+type IMEConfig = { enabled: boolean; fromScript: string; toScript: string };
+
+function imePlugin(getConfig: () => IMEConfig) {
+  let buffer = '';
+  let popup: HTMLDivElement | null = null;
+
+  function ensurePopup(): HTMLDivElement {
+    if (!popup) {
+      popup = document.createElement('div');
+      popup.className = 'ime-popup';
+      popup.style.display = 'none';
+      document.body.appendChild(popup);
+    }
+    return popup;
+  }
+
+  function updatePopup(view: EditorView) {
+    const el = ensurePopup();
+    if (!buffer) {
+      el.style.display = 'none';
+      return;
+    }
+
+    const config = getConfig();
+    const transliterated = (window as any).Sanscript.t(buffer, config.fromScript, config.toScript);
+    el.textContent = transliterated;
+    el.style.display = '';
+
+    const coords = view.coordsAtPos(view.state.selection.from);
+    el.style.left = `${coords.left}px`;
+    el.style.top = `${coords.bottom + 4}px`;
+  }
+
+  function commitBuffer(view: EditorView, suffix: string = '') {
+    if (!buffer) return;
+    const config = getConfig();
+    const text = (window as any).Sanscript.t(buffer, config.fromScript, config.toScript) + suffix;
+    const { from } = view.state.selection;
+    view.dispatch(view.state.tr.insertText(text, from, from));
+    buffer = '';
+    ensurePopup().style.display = 'none';
+  }
+
+  return new Plugin({
+    props: {
+      handleKeyDown(view: EditorView, event: KeyboardEvent) {
+        const config = getConfig();
+        if (!config.enabled) return false;
+
+        if (event.key === 'Escape') {
+          if (buffer) {
+            buffer = '';
+            ensurePopup().style.display = 'none';
+            return true;
+          }
+          return false;
+        }
+
+        if (event.key === 'Enter') {
+          if (buffer) {
+            commitBuffer(view);
+            return true;
+          }
+          return false;
+        }
+
+        if (event.key === ' ') {
+          if (buffer) {
+            commitBuffer(view, ' ');
+            return true;
+          }
+          return false;
+        }
+
+        if (event.key === 'Backspace') {
+          if (buffer) {
+            buffer = buffer.slice(0, -1);
+            updatePopup(view);
+            return true;
+          }
+          return false;
+        }
+
+        // Printable character (single char, no modifier)
+        if (event.key.length === 1 && !event.ctrlKey && !event.metaKey) {
+          event.preventDefault();
+          buffer += event.key;
+          updatePopup(view);
+          return true;
+        }
+
+        // Other keys (arrows, Tab, etc.): commit buffer first, then pass through
+        if (buffer) {
+          commitBuffer(view);
+        }
+        return false;
+      },
+    },
+    destroy() {
+      if (popup && popup.parentNode) {
+        popup.parentNode.removeChild(popup);
+        popup = null;
+      }
+    },
+  });
+}
+
 function createBlockBelow(state: EditorState, dispatch?: (tr: Transaction) => void): boolean {
   const { $from, $to } = state.selection;
   const currentBlock = $from.node($from.depth);
@@ -978,6 +1086,7 @@ export default class {
     onActiveWordChange?: (
       context: { word: string; lineText: string; wordIndex: number } | null,
     ) => void,
+    imeGetConfig?: () => IMEConfig,
   ) {
     this.schema = customSchema;
     this.onChange = onChange;
@@ -993,20 +1102,25 @@ export default class {
       doc = this.schema.node('doc', null, [this.schema.node('block', { type: 'p' })]);
     }
 
+    const plugins = [
+      history(),
+      keymap({
+        'Mod-z': pmUndo,
+        'Mod-y': pmRedo,
+        'Shift-Enter': createBlockBelow,
+        'Mod-b': (state, dispatch) => { this.toggleMark('bold'); return true; },
+        'Mod-i': (state, dispatch) => { this.toggleMark('italic'); return true; },
+      }),
+      keymap(baseKeymap),
+      activeWordPlugin(this.onActiveWordChange),
+    ];
+    if (imeGetConfig) {
+      plugins.unshift(imePlugin(imeGetConfig));
+    }
+
     const state = EditorState.create({
       doc,
-      plugins: [
-        history(),
-        keymap({
-          'Mod-z': pmUndo,
-          'Mod-y': pmRedo,
-          'Shift-Enter': createBlockBelow,
-          'Mod-b': (state, dispatch) => { this.toggleMark('bold'); return true; },
-          'Mod-i': (state, dispatch) => { this.toggleMark('italic'); return true; },
-        }),
-        keymap(baseKeymap),
-        activeWordPlugin(this.onActiveWordChange),
-      ],
+      plugins,
     });
 
     this.view = new EditorView(element, {

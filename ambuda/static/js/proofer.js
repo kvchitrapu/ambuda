@@ -207,6 +207,8 @@ export default () => ({
   toScript: 'devanagari',
   // If true, show advanced options (text, n, and merge_next)
   showAdvancedOptions: false,
+  // If true, enable IME transliteration mode
+  imeEnabled: false,
   showMarkToolbar: false,
   inlineMarks: INLINE_MARKS,
   markGroups: MARK_GROUPS,
@@ -297,7 +299,7 @@ export default () => ({
         $('#content').value = Alpine.raw(this.editor).getText();
       }, this.showAdvancedOptions, this.textZoom, (context) => {
         this.onActiveWordChange(context);
-      });
+      }, () => ({ enabled: this.imeEnabled, fromScript: this.fromScript, toScript: this.toScript }));
     }
 
     // Set `imageZoom` only after the viewer is fully initialized.
@@ -348,6 +350,7 @@ export default () => ({
       { label: 'Tools > Normalize', action: () => this.openNormalizeModal() },
       { label: 'Tools > Transliterate', action: () => this.openTransliterateModal() },
       { label: 'Tools > Auto-structure', action: () => this.openAutoStructureModal() },
+      { label: 'Tools > Transliterator IME', action: () => this.toggleIME() },
     ];
   },
 
@@ -432,6 +435,7 @@ export default () => ({
         this.fromScript = settings.fromScript || this.fromScript;
         this.toScript = settings.toScript || this.toScript;
         this.showAdvancedOptions = settings.showAdvancedOptions || this.showAdvancedOptions;
+        this.imeEnabled = settings.imeEnabled || false;
 
         this.trackBoundingBox = settings.trackBoundingBox || false;
         this.invertImageColors = settings.invertImageColors || false;
@@ -464,6 +468,7 @@ export default () => ({
       fromScript: this.fromScript,
       toScript: this.toScript,
       showAdvancedOptions: this.showAdvancedOptions,
+      imeEnabled: this.imeEnabled,
       trackBoundingBox: this.trackBoundingBox,
       invertImageColors: this.invertImageColors,
       normalizeReplaceColonVisarga: this.normalizeReplaceColonVisarga,
@@ -825,7 +830,7 @@ export default () => ({
           $('#content').value = Alpine.raw(this.editor).getText();
         }, this.showAdvancedOptions, this.textZoom, (context) => {
           this.onActiveWordChange(context);
-        });
+        }, () => ({ enabled: this.imeEnabled, fromScript: this.fromScript, toScript: this.toScript }));
       } catch (error) {
         this.xmlParseError = `Invalid XML: ${error.message}`;
         console.error('Failed to parse XML:', error);
@@ -854,6 +859,11 @@ export default () => ({
 
   toggleInvertImageColors() {
     this.invertImageColors = !this.invertImageColors;
+    this.saveSettings();
+  },
+
+  toggleIME() {
+    this.imeEnabled = !this.imeEnabled;
     this.saveSettings();
   },
 

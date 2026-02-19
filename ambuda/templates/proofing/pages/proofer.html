@@ -93,6 +93,17 @@
   .mark-btn::before { content: none !important; }
   .mark-tooltip { display: none; }
   .mark-btn:hover .mark-tooltip { display: block; }
+  .ime-popup {
+    position: fixed;
+    background: oklch(68.5% 0.169 237.323);
+    color: white;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 1.1rem;
+    pointer-events: none;
+    z-index: 100;
+    white-space: nowrap;
+  }
 </style>
 {# Loading overlay shown while Alpine.js initializes #}
 <div id="editor-loading" class="h-screen flex items-center justify-center bg-slate-50">
@@ -214,6 +225,14 @@
         {{ _dropdown_item('openNormalizeModal', _('Normalize...')) }}
         {{ _dropdown_item('openTransliterateModal', _('Transliterate...')) }}
         {{ _dropdown_item('openAutoStructureModal', _('Auto-structure...')) }}
+        {{ _dropdown_separator() }}
+        <li>
+          <button class="dropdown-item" @click.prevent="toggleIME">
+            <span x-show="imeEnabled" class="inline-block w-4">&#x2713;</span>
+            <span x-show="!imeEnabled" class="inline-block w-4"></span>
+            {{ _('Transliterator IME') }}
+          </button>
+        </li>
       {% endcall %}
     </div>
 
