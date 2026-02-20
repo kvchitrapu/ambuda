@@ -1,0 +1,101 @@
+{# Partial: project list + pagination. Rendered standalone for ?partial=1 requests. #}
+{% import "macros/proofing.html" as m %}
+
+{% if projects %}
+<p class="text-sm text-slate-500 mb-2">{{ _('Showing %(start)d–%(end)d of %(total)d projects', start=((page - 1) * 25 + 1), end=[page * 25, total]|min, total=total) }}</p>
+
+<div class="space-y-3">
+  {% for p in projects %}
+  {% set count = pages_per_project.get(p.id, 0) %}
+  <div class="border bg-white overflow-hidden">
+
+    {# Progress bar along top edge #}
+    <div class="flex h-1">
+    {% for cls, fraction in statuses_per_project.get(p.id, {}).items() %}
+      <div class="{{ cls }}" style="width: {{ fraction * 100 }}%"></div>
+    {% endfor %}
+    </div>
+
+    <div class="px-4 py-2.5">
+      {# Row 1: checkbox + title + genre + page count #}
+      <div class="flex items-baseline justify-between gap-2">
+        <div class="flex items-baseline gap-2 min-w-0">
+          {% if current_user.is_authenticated and current_user.is_p2 %}
+          <input type="checkbox" class="shrink-0 relative top-px"
+                 :checked="isSelected('{{ p.slug }}')"
+                 @change="toggleSelect('{{ p.slug }}')">
+          {% endif %}
+          <a href="{{ url_for("proofing.project.summary", slug=p.slug) }}"
+             class="font-medium text-slate-900 hover:text-sky-700">{{ p.display_title }}</a>
+          {% if p.genre %}
+          <span class="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded whitespace-nowrap">{{ p.genre.name }}</span>
+          {% endif %}
+        </div>
+        <span class="text-xs text-slate-400 whitespace-nowrap">
+          {{ ngettext('%(num)d page', '%(num)d pages', count) }}
+        </span>
+      </div>
+
+      {% if p.description %}
+      <p class="mt-1 text-sm text-slate-500 line-clamp-2">
+        {{ p.description|markdown|striptags|truncate(200) }}
+      </p>
+      {% endif %}
+
+      {# Tags row — only rendered when there are tags or user can edit #}
+      {% if current_user.is_authenticated and current_user.is_p2 %}
+      <div x-data="tagEditor()"
+           data-project-slug="{{ p.slug }}"
+           data-tags='{{ p.tags|map(attribute="name")|list|tojson }}'
+           class="flex items-center gap-1 flex-wrap mt-1"
+           x-show="projectTags.length > 0 || isOpen">
+        <template x-for="tag in projectTags" :key="tag">
+          <span class="text-xs bg-sky-50 text-sky-700 px-1.5 py-0.5 rounded" x-text="tag"></span>
+        </template>
+        <div class="relative inline-block">
+          <button @click="isOpen = !isOpen" type="button"
+                  class="text-xs text-slate-300 hover:text-sky-600 px-0.5 leading-none"
+                  title="{{ _('Edit tags') }}">+</button>
+          <div x-show="isOpen" @click.outside="closeDropdown()" x-cloak
+               class="absolute left-0 mt-1 w-52 bg-white border rounded shadow-lg z-20 p-2">
+            <input type="text" x-model="newTag" placeholder="{{ _('Filter or create...') }}"
+                   class="w-full p-1 border rounded text-sm mb-1"
+                   @keydown.enter.prevent="showCreate && createTag()">
+            <ul class="max-h-40 overflow-y-auto">
+              <template x-for="tag in filteredTags" :key="tag">
+                <li>
+                  <label class="flex items-center gap-1.5 px-2 py-1 hover:bg-slate-100 rounded text-sm cursor-pointer">
+                    <input type="checkbox" :checked="hasTag(tag)" @change="toggle(tag)">
+                    <span x-text="tag"></span>
+                  </label>
+                </li>
+              </template>
+            </ul>
+            <template x-if="showCreate">
+              <button @click="createTag()" type="button"
+                      class="w-full text-left px-2 py-1 mt-1 text-sky-700 hover:bg-sky-50 rounded text-sm border-t">
+                {{ _('Create') }} "<span x-text="newTag"></span>"
+              </button>
+            </template>
+          </div>
+        </div>
+      </div>
+      {% elif p.tags %}
+      <div class="flex items-center gap-1 flex-wrap mt-1">
+        {% for t in p.tags %}
+        <span class="text-xs bg-sky-50 text-sky-700 px-1.5 py-0.5 rounded">{{ t.name }}</span>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{{ m.proofing_pagination(page, total_pages, search=search, sort_field=sort_field, sort_dir=sort_dir, genre_id=genre_id, tag_id=tag_id, status_filter=status_filter) }}
+
+{% else %}
+<div class="prose">
+<p>{% trans create_url=url_for('proofing.create_project') %}There aren't any ongoing projects. <a href="{{ create_url }}">Create a new project to get started</a>.{% endtrans %}</p>
+</div>
+{% endif %}
