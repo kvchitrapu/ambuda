@@ -95,10 +95,10 @@
   {{ i.i_exclamation_circle() }}
   {% for heading, entries in grouped_entries.items() %}
     {% if entries %}
-    <div data-section class="mb-16">
+    <section data-section class="mb-16 deva-serif">
       <h2 class="text-sky-900 font-bold text-4xl text-center mt-16 mb-10">{{ heading | hk_to_user_script }}</h2>
       {{ all_texts(entries) }}
-    </div>
+    </section>
     {% endif %}
   {% endfor %}
 {% endmacro %}

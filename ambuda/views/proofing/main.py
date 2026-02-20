@@ -7,7 +7,18 @@ from pathlib import Path
 
 from xml.etree import ElementTree as ET
 
-from flask import Blueprint, current_app, flash, make_response, render_template, url_for
+from math import ceil
+
+from flask import (
+    Blueprint,
+    abort,
+    current_app,
+    flash,
+    make_response,
+    render_template,
+    request,
+    url_for,
+)
 from flask_login import current_user
 from flask_wtf import FlaskForm
 from slugify import slugify
@@ -104,11 +115,19 @@ def dashboard():
     )
     num_texts = session.scalar(select(func.count(db.Text.id)))
 
+    my_projects = []
+    if current_user.is_authenticated:
+        my_projects = q.user_recent_projects(current_user.id)
+
+    help_projects = q.needs_help_projects()
+
     return render_template(
         "proofing/dashboard.html",
         num_active_projects=num_active_projects,
         num_pending_projects=num_pending_projects,
         num_texts=num_texts,
+        my_projects=my_projects,
+        help_projects=help_projects,
     )
 
 
@@ -125,99 +144,125 @@ def index():
         SitePageStatus.SKIP: "bg-slate-100",
     }
 
-    load_opts = orm.load_only(
-        db.Project.id,
-        db.Project.display_title,
-        db.Project.slug,
-        db.Project.created_at,
-        db.Project.description,
+    page = max(1, request.args.get("page", 1, type=int))
+    per_page = 25
+    search = request.args.get("q", "", type=str).strip()
+    sort_field = request.args.get("sort", "title", type=str)
+    sort_dir = request.args.get("sort_dir", "asc", type=str)
+    genre_id = request.args.get("genre", None, type=int)
+    tag_id = request.args.get("tag", None, type=int)
+
+    is_p2 = current_user.is_authenticated and current_user.is_p2
+    valid_statuses = (
+        "all",
+        "active",
+        "pending",
+        "closed-copy",
+        "closed-duplicate",
+        "closed-quality",
     )
-
-    # Only load the columns we need for the template
-    projects = list(
-        session.scalars(
-            select(db.Project)
-            .filter(db.Project.status == ProjectStatus.ACTIVE)
-            .options(load_opts)
-        ).all()
+    status_filter = (
+        request.args.get("status", "active", type=str) if is_p2 else "active"
     )
+    if status_filter not in valid_statuses:
+        status_filter = "active"
+    if sort_field not in ("title", "created"):
+        sort_field = "title"
+    if sort_dir not in ("asc", "desc"):
+        sort_dir = "asc"
 
-    # Include pending projects as a separate list for p2 users
-    pending_projects = []
-    if current_user.is_authenticated and current_user.is_p2:
-        pending_projects = list(
-            session.scalars(
-                select(db.Project)
-                .filter(db.Project.status == ProjectStatus.PENDING)
-                .options(load_opts)
-            ).all()
-        )
-        pending_projects.sort(key=lambda x: x.display_title)
+    projects, total = q.paginated_projects(
+        status=status_filter,
+        page=page,
+        per_page=per_page,
+        sort_field=sort_field,
+        sort_dir=sort_dir,
+        search=search,
+        genre_id=genre_id,
+        tag_id=tag_id,
+    )
+    total_pages = ceil(total / per_page) if total > 0 else 1
 
-    # Only calculate stats for active projects to avoid wasting time on inactive ones
     active_project_ids = [p.id for p in projects]
-    if not active_project_ids:
-        # No active projects, return early
-        return render_template(
-            "proofing/index.html",
-            projects=[],
-            pending_projects=pending_projects,
-            statuses_per_project={},
-            progress_per_project={},
-            pages_per_project={},
-        )
-
-    stmt = (
-        select(
-            db.Page.project_id,
-            db.PageStatus.name,
-            func.count(db.Page.id).label("count"),
-        )
-        .join(db.PageStatus)
-        .filter(db.Page.project_id.in_(active_project_ids))
-        .group_by(db.Page.project_id, db.PageStatus.name)
-    )
-    stats = session.execute(stmt).all()
-
-    status_counts_by_project = defaultdict(lambda: defaultdict(int))
-    for project_id, status_name, count in stats:
-        status_counts_by_project[project_id][status_name] = count
-
-    # Build display dictionaries
     statuses_per_project = {}
     progress_per_project = {}
     pages_per_project = {}
 
-    for project in projects:
-        counts = status_counts_by_project[project.id]
-        num_pages = sum(counts.values())
+    if active_project_ids:
+        stmt = (
+            select(
+                db.Page.project_id,
+                db.PageStatus.name,
+                func.count(db.Page.id).label("count"),
+            )
+            .join(db.PageStatus)
+            .filter(db.Page.project_id.in_(active_project_ids))
+            .group_by(db.Page.project_id, db.PageStatus.name)
+        )
+        stats = session.execute(stmt).all()
 
-        if num_pages == 0:
-            statuses_per_project[project.id] = {}
-            pages_per_project[project.id] = 0
-            continue
+        status_counts_by_project = defaultdict(lambda: defaultdict(int))
+        for project_id, status_name, count in stats:
+            status_counts_by_project[project_id][status_name] = count
 
-        project_counts = {}
-        for enum_value, class_ in status_classes.items():
-            count = counts.get(enum_value.value, 0)
-            fraction = count / num_pages
-            project_counts[class_] = fraction
-            if enum_value == SitePageStatus.R0:
-                # The more red pages there are, the lower progress is.
-                progress_per_project[project.id] = 1 - fraction
+        for proj in projects:
+            counts = status_counts_by_project[proj.id]
+            num_pages = sum(counts.values())
 
-        statuses_per_project[project.id] = project_counts
-        pages_per_project[project.id] = num_pages
+            if num_pages == 0:
+                statuses_per_project[proj.id] = {}
+                pages_per_project[proj.id] = 0
+                continue
 
-    projects.sort(key=lambda x: x.display_title)
-    return render_template(
-        "proofing/index.html",
+            project_counts = {}
+            for enum_value, class_ in status_classes.items():
+                count = counts.get(enum_value.value, 0)
+                fraction = count / num_pages
+                project_counts[class_] = fraction
+                if enum_value == SitePageStatus.R0:
+                    progress_per_project[proj.id] = 1 - fraction
+
+            statuses_per_project[proj.id] = project_counts
+            pages_per_project[proj.id] = num_pages
+
+    genres = q.genres()
+    tags = q.project_tags()
+
+    # Count projects per tag for the tag cloud.
+    from ambuda.models.proofing import project_tag_association
+
+    tag_count_stmt = select(
+        project_tag_association.c.tag_id,
+        func.count().label("cnt"),
+    ).group_by(project_tag_association.c.tag_id)
+    tag_counts = {row[0]: row[1] for row in session.execute(tag_count_stmt).all()}
+
+    template_vars = dict(
         projects=projects,
-        pending_projects=pending_projects,
         statuses_per_project=statuses_per_project,
         progress_per_project=progress_per_project,
         pages_per_project=pages_per_project,
+        genres=genres,
+        tags=tags,
+        tag_counts=tag_counts,
+        page=page,
+        total_pages=total_pages,
+        total=total,
+        search=search,
+        sort_field=sort_field,
+        sort_dir=sort_dir,
+        genre_id=genre_id,
+        tag_id=tag_id,
+        status_filter=status_filter,
     )
+
+    if request.args.get("partial"):
+        from flask import jsonify
+
+        html = render_template("proofing/index_projects.html", **template_vars)
+        return jsonify(html=html, total=total)
+
+    return render_template("proofing/index.html", **template_vars)
 
 
 @bp.route("/help/complete-guide")
@@ -409,9 +454,22 @@ def talk():
 @bp.route("/texts")
 def texts():
     """List all published texts."""
+    from ambuda.utils.text_validation import safe_parse_report
+
     session = q.get_session()
+
+    # Fetch texts with their latest validation report in a single query.
+    latest_report = (
+        select(db.TextReport.id)
+        .where(db.TextReport.text_id == db.Text.id)
+        .order_by(db.TextReport.created_at.desc())
+        .limit(1)
+        .correlate(db.Text)
+        .scalar_subquery()
+    )
     stmt = (
-        select(db.Text)
+        select(db.Text, db.TextReport)
+        .outerjoin(db.TextReport, db.TextReport.id == latest_report)
         .options(
             orm.selectinload(db.Text.project).load_only(
                 db.Project.slug, db.Project.display_title
@@ -420,15 +478,41 @@ def texts():
         )
         .order_by(db.Text.created_at.desc())
     )
-    all_texts = list(session.scalars(stmt).all())
-    texts_with_project = [t for t in all_texts if t.project]
-    texts_without_project = [t for t in all_texts if not t.project]
+    rows = session.execute(stmt).all()
+
+    # Build a flat list of (text, parsed_report) pairs.
+    report_map = {}
+    all_texts = []
+    for t, tr in rows:
+        all_texts.append(t)
+        if tr:
+            report_map[t.id] = safe_parse_report(tr.payload)
 
     return render_template(
         "proofing/texts.html",
-        texts_with_project=texts_with_project,
-        texts_without_project=texts_without_project,
+        all_texts=all_texts,
+        report_map=report_map,
     )
+
+
+@bp.route("/texts/<slug>/report")
+def text_report(slug):
+    """Show validation report for a text."""
+    from ambuda.utils.text_validation import safe_parse_report
+    from ambuda.tasks.text_validation import maybe_rerun_report
+
+    text = q.text(slug)
+    if text is None:
+        abort(404)
+    assert text
+
+    report = None
+    text_report = q.text_report(text.id)
+    if text_report:
+        report = safe_parse_report(text_report.payload)
+        if report is None:
+            maybe_rerun_report(text.id, current_app.config["AMBUDA_ENVIRONMENT"])
+    return render_template("proofing/text-report.html", text=text, report=report)
 
 
 @bp.route("/admin/dashboard/")

@@ -343,6 +343,28 @@ class TextExport(Base):
             return None
 
 
+class TextReport(Base):
+    """A stored validation report for a text."""
+
+    __tablename__ = "text_reports"
+
+    id = pk()
+    #: The text this report belongs to.
+    text_id = foreign_key("texts.id")
+    #: When this report was created.
+    created_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    #: When this report was last updated.
+    updated_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
+    #: The validation report payload as JSON.
+    payload = Column(JSON, nullable=False)
+
+    text = relationship("Text", backref="reports")
+
+    @staticmethod
+    def rerun_lock_key(text_id: int) -> str:
+        return f"report_rerun:{text_id}"
+
+
 class TextBlockBookmark(Base):
     """Bookmarks on a text."""
 

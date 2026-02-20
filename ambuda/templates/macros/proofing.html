@@ -80,7 +80,7 @@
 {% macro proofing_tabs(active, current_user) %}
 <div class="border-b border-gray-200 mb-4">
   <nav class="flex gap-6">
-    {% if current_user.is_p2 %}
+    {% if current_user.is_authenticated %}
     <a href="{{ url_for('proofing.dashboard') }}"
        class="py-2 px-1 border-b-2 {% if active == 'dashboard' %}border-sky-900 text-sky-900 font-medium{% else %}border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300{% endif %}">
       {{ _('Dashboard') }}
@@ -262,6 +262,29 @@ bg-gray-200 text-gray-800
     <option value="desc">{{ _('Descending') }}</option>
   </select>
 </form>
+{% endmacro %}
+
+
+{% macro proofing_pagination(page, total_pages, search='', sort_field='title', sort_dir='asc', genre_id=none, tag_id=none, status_filter='active') %}
+{% if total_pages > 1 %}
+<nav class="flex justify-center items-center gap-4 mt-8 mb-4 text-sm">
+  {% if page > 1 %}
+  <a href="{{ url_for('proofing.index', page=page - 1, q=search or none, sort=sort_field, sort_dir=sort_dir, genre=genre_id, tag=tag_id, status=status_filter) }}"
+     class="px-3 py-1 rounded border hover:bg-slate-100">&larr; {{ _('Previous') }}</a>
+  {% else %}
+  <span class="px-3 py-1 rounded border text-slate-300">&larr; {{ _('Previous') }}</span>
+  {% endif %}
+
+  <span class="text-slate-600">{{ _('Page %(page)d of %(total)d', page=page, total=total_pages) }}</span>
+
+  {% if page < total_pages %}
+  <a href="{{ url_for('proofing.index', page=page + 1, q=search or none, sort=sort_field, sort_dir=sort_dir, genre=genre_id, tag=tag_id, status=status_filter) }}"
+     class="px-3 py-1 rounded border hover:bg-slate-100">{{ _('Next') }} &rarr;</a>
+  {% else %}
+  <span class="px-3 py-1 rounded border text-slate-300">{{ _('Next') }} &rarr;</span>
+  {% endif %}
+</nav>
+{% endif %}
 {% endmacro %}
 
 

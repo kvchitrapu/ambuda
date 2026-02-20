@@ -38,4 +38,31 @@
   </ul>
 </div>
 
+{% if my_projects %}
+<div class="mt-8">
+  <h2 class="font-bold text-xl mb-3">{{ _('My Recent Projects') }}</h2>
+  <ul class="a-hover-underline space-y-1">
+    {% for p in my_projects %}
+    <li>
+      <a href="{{ url_for('proofing.project.summary', slug=p.slug) }}">{{ p.display_title }}</a>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% if help_projects %}
+<div class="mt-8">
+  <h2 class="font-bold text-xl mb-3">{{ _('Needs Help') }}</h2>
+  <p class="text-sm text-slate-500 mb-2">{{ _('Projects with the most unproofed pages') }}</p>
+  <ul class="a-hover-underline space-y-1">
+    {% for p in help_projects %}
+    <li>
+      <a href="{{ url_for('proofing.project.summary', slug=p.slug) }}">{{ p.display_title }}</a>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
 {% endblock %}

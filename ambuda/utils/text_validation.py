@@ -4,6 +4,7 @@ from typing import Callable
 import xml.etree.ElementTree as ET
 from chanda import analyze_text
 import defusedxml.ElementTree as DET
+from pydantic import BaseModel, Field
 from vidyut.lipi import transliterate, Scheme
 
 import ambuda.database as db
@@ -15,12 +16,11 @@ CHANDAS_WHITELIST = ["उवाच"]
 # pass, fail, warning
 
 
-@dc.dataclass
-class ValidationResult:
+class ValidationResult(BaseModel):
     description: str = ""
     num_ok: int = 0
     num_total: int = 0
-    errors: list[str] = dc.field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
 
     def incr_ok(self):
         self.num_ok += 1
@@ -34,8 +34,7 @@ class ValidationResult:
         self.errors.append(error)
 
 
-@dc.dataclass
-class ValidationReport:
+class ValidationReport(BaseModel):
     results: list[ValidationResult]
 
 
@@ -97,19 +96,23 @@ def validate_xml_is_well_formed(xml: ET.Element) -> ValidationResult:
 
 
 @validation_rule(desc="Sanskrit text is well-formed")
-def validate_all_sanskrit_text_is_well_formed(block: ET.Element) -> ValidationResult:
+def validate_all_sanskrit_text_is_well_formed(xml: ET.Element) -> ValidationResult:
     ret = ValidationResult()
     # Sanskrit text in Devanagari is expected to match this regex.
-    RE_ILLEGAL = r"([^\u0900-\u097F !,\-\.])"
-    for el in block.iter():
+    #
+    # Unicode tables:
+    # - https://www.unicode.org/charts/PDF/U0900.pdf
+    # - https://www.unicode.org/charts/PDF/UA8E0.pdf
+    RE_ILLEGAL = r"([^\u0900-\u097F\ua8e0-\ua8ff !,\-\.])"
+    for block in xml.iter():
         ret.incr_total()
-        if m := re.search(RE_ILLEGAL, el.text or ""):
+        if m := re.search(RE_ILLEGAL, block.text or ""):
             ret.add_error(
-                f"Unexpected character '{m.group(1)}' in text <{el.text or ''}>"
+                f"oUnexpected character '{m.group(1)}' in text <{block.text or ''}>"
             )
-        elif m := re.search(RE_ILLEGAL, el.tail or ""):
+        elif m := re.search(RE_ILLEGAL, block.tail or ""):
             ret.add_error(
-                f"Unexpected character '{m.group(1)}' in text <{el.tail or ''}>"
+                f"oUnexpected character '{m.group(1)}' in text <{block.tail or ''}>"
             )
         else:
             ret.incr_ok()
@@ -117,14 +120,14 @@ def validate_all_sanskrit_text_is_well_formed(block: ET.Element) -> ValidationRe
 
 
 @validation_rule(desc="Validate verse number if it exists")
-def validate_verse_number_if_exists(block: ET.Element) -> ValidationResult:
+def validate_verse_number_if_exists(xml: ET.Element) -> ValidationResult:
     ret = ValidationResult()
     # Captures verse numbers of the form ॥१-३॥ ॥१.३॥ ॥१-३-३॥ ॥१॥ etc.
     RE_VERSE_NUMBERS = r"॥\s*([\u0966-\u096F]+(?:[-\.]+[\u0966-\u096F]+)*)\s*॥$"
-    for el in block.findall(".//lg"):
-        if (n := el.attrib.get("n", None)) is not None:
-            n = n.removeprefix(el.tag)
-            text = "".join(el.itertext())
+    for block in xml.findall(".//lg"):
+        if (n := block.attrib.get("n", None)) is not None:
+            n = n.removeprefix(block.tag)
+            text = "".join(block.itertext())
             if m := re.search(RE_VERSE_NUMBERS, text):
                 ret.incr_total()
                 m_n = re.split(r"[-\.]", m.group(1))[-1]
@@ -138,23 +141,34 @@ def validate_verse_number_if_exists(block: ET.Element) -> ValidationResult:
 
 
 @validation_rule(desc="Validate chandas")
-def validate_chandas(block: ET.Element) -> ValidationResult:
+def validate_chandas(xml: ET.Element) -> ValidationResult:
     ret = ValidationResult()
-    clean_text = "\n".join(block.itertext()).strip()
-    results = analyze_text(clean_text, verse_mode=False, fuzzy=True)
 
-    if len(results.result.line) > 0:
-        for line in results.result.line:
-            ret.incr_total()
-            if line.result.found or any(
-                w in line.result.line.split() for w in CHANDAS_WHITELIST
-            ):
-                ret.incr_ok()
-            else:
-                ret.add_error(f"No valid chandas detected for line {line.result.line}")
-    else:
-        ret.add_error(f"No valid chandas detected for text {clean_text}")
+    for block in xml.findall(".//lg"):
+        clean_text = "\n".join(block.itertext()).strip()
+        results = analyze_text(clean_text, verse_mode=False, fuzzy=True)
+        if len(results.result.line) > 0:
+            for line in results.result.line:
+                ret.incr_total()
+                if line.result.found or any(
+                    w in line.result.line.split() for w in CHANDAS_WHITELIST
+                ):
+                    ret.incr_ok()
+                else:
+                    ret.add_error(
+                        f"No valid chandas detected for line {line.result.line}"
+                    )
+        else:
+            ret.add_error(f"No valid chandas detected for text {clean_text}")
     return ret
+
+
+def safe_parse_report(payload) -> ValidationReport | None:
+    """Parse a report payload, returning None on failure."""
+    try:
+        return ValidationReport.model_validate(payload)
+    except Exception:
+        return None
 
 
 RULES = [

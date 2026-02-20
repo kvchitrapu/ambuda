@@ -196,7 +196,7 @@ function imePlugin(getConfig: () => IMEConfig) {
     el.style.display = '';
 
     try {
-      const coords = view.coordsAtPos(view.state.selection.from);
+      const coords = view.coordsAtPos(bufferStart);
       el.style.left = `${coords.left}px`;
       el.style.top = `${coords.bottom + 4}px`;
     } catch {

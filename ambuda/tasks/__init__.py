@@ -35,6 +35,7 @@ app = Celery(
         "ambuda.tasks.tagging",
         "ambuda.tasks.text_exports",
         "ambuda.tasks.batch_llm",
+        "ambuda.tasks.text_validation",
     ],
 )
 app.conf.update(

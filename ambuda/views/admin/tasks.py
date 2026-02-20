@@ -698,6 +698,33 @@ def import_projects(model_name, selected_ids: list | None = None):
     )
 
 
+def run_quality_reports(model_name, selected_ids: list | None = None):
+    """Batch action to run quality reports for selected texts."""
+    if not selected_ids:
+        flash("No texts selected", "error")
+        return redirect(url_for("admin.list_model", model_name=model_name))
+
+    from ambuda.tasks.text_validation import run_report
+
+    session = q.get_session()
+    app_environment = current_app.config["AMBUDA_ENVIRONMENT"]
+
+    task_count = 0
+    for text_id in selected_ids:
+        text = session.get(db.Text, int(text_id))
+        if not text:
+            continue
+
+        run_report.apply_async(
+            args=(text.id, app_environment),
+            headers={"initiated_by": current_user.username},
+        )
+        task_count += 1
+
+    flash(f"Started quality report for {task_count} text(s).", "success")
+    return redirect(url_for("admin.list_model", model_name=model_name))
+
+
 def create_exports(model_name, selected_ids: list | None = None):
     """Batch action to create all exports for selected texts."""
     if not selected_ids:

@@ -260,6 +260,11 @@ MODEL_CONFIG = [
                 slug="create-exports",
                 handler=tasks.create_exports,
             ),
+            Task(
+                name="Run quality report",
+                slug="run-quality-report",
+                handler=tasks.run_quality_reports,
+            ),
         ],
         display_field="slug",
         enum_fields={"status": TextStatus},

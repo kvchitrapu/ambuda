@@ -35,6 +35,7 @@ export default (defaultField) => ({
     }));
     this.matcher = createSearchMatcher(this.data, (x) => x.title);
     this.displayed = new Set(this.data.map((x) => x.key));
+    this.sort();
   },
 
   /** Filter the list by the user's query string. */
@@ -54,5 +55,16 @@ export default (defaultField) => ({
     [...list.children]
       .sort(orderFn(this.field))
       .forEach((node) => list.appendChild(node));
+  },
+
+  /** Toggle sort on a column: click once for asc, again for desc, again to reset. */
+  sortBy(newField) {
+    if (this.field === newField) {
+      this.order = this.order === 'asc' ? 'desc' : 'asc';
+    } else {
+      this.field = newField;
+      this.order = 'asc';
+    }
+    this.sort();
   },
 });

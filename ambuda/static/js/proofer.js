@@ -1140,6 +1140,7 @@ export default () => ({
   },
 
   async saveViaAPI() {
+    if (this.isSaving) return;
     this.isSaving = true;
 
     try {
@@ -1195,7 +1196,7 @@ export default () => ({
       console.error('Save failed:', error);
       this.showAlert('error', 'Save failed. Please check your connection.');
     } finally {
-      this.isSaving = false;
+      setTimeout(() => { this.isSaving = false; }, 500);
     }
   },
 

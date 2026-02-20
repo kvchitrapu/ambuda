@@ -1,12 +1,20 @@
 import logging
+import os
 from contextlib import contextmanager
 
+import redis
 from celery import states
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 import config
 from ambuda import queries
+
+
+def get_redis():
+    """Get a Redis client from the Celery broker URL."""
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    return redis.Redis.from_url(redis_url)
 
 
 class TaskStatus:

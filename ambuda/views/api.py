@@ -155,6 +155,56 @@ def auto_structure_api():
         return jsonify({"error": "Auto-structuring failed"}), 500
 
 
+@bp.route("/proofing/tags")
+def proofing_tags_api():
+    """Return all existing project tags."""
+    session = q.get_session()
+    tags = list(session.scalars(select(db.ProjectTag)).all())
+    return jsonify({"tags": [{"id": t.id, "name": t.name} for t in tags]})
+
+
+@bp.route("/proofing/projects/<slug>/tags", methods=["POST"])
+@p2_required
+def proofing_project_tags_api(slug):
+    """Set the full tag list for a project."""
+    project_ = q.project(slug)
+    if project_ is None:
+        abort(404)
+
+    data = request.get_json()
+    if data is None or "tags" not in data:
+        return jsonify({"error": "Missing 'tags' field"}), 400
+
+    tag_names = data["tags"]
+    if not isinstance(tag_names, list):
+        return jsonify({"error": "'tags' must be an array"}), 400
+
+    session = q.get_session()
+    resolved_tags = []
+    for name in tag_names:
+        name = str(name).strip()
+        if not name:
+            continue
+        tag = session.scalars(
+            select(db.ProjectTag).filter(db.ProjectTag.name == name)
+        ).first()
+        if tag is None:
+            tag = db.ProjectTag(name=name)
+            session.add(tag)
+            session.flush()
+        resolved_tags.append(tag)
+
+    project_.tags = resolved_tags
+    session.commit()
+
+    return jsonify(
+        {
+            "ok": True,
+            "tags": [{"id": t.id, "name": t.name} for t in project_.tags],
+        }
+    )
+
+
 @bp.route("/proofing/<project_slug>/<page_slug>/history")
 def page_history_api(project_slug, page_slug):
     from ambuda.views.proofing.page import _get_page_context

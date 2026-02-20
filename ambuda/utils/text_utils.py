@@ -81,7 +81,7 @@ def create_grouped_text_entries() -> dict[str, list[TextEntry]]:
 
     # Map genre name (Devanagari, as stored in DB) -> heading display value (HK)
     genre_to_heading = {
-        _d("upaniSat"): "vedAH",
+        _d("upaniSat"): "upaniSadaH",
         _d("itihAsaH"): "itihAsau",
         _d("kAvyam"): "kAvyAni",
         _d("stotram"): "stotrANi",

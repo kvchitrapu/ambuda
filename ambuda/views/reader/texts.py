@@ -21,7 +21,8 @@ from ambuda.models.texts import TextConfig
 from ambuda.utils import text_utils
 from ambuda.utils import xml
 from ambuda.utils.json_serde import AmbudaJSONEncoder
-from ambuda.utils.text_validation import validate
+from ambuda.utils.text_validation import safe_parse_report
+from ambuda.tasks.text_validation import maybe_rerun_report
 from ambuda.views.reader.schema import Block, Section
 from ambuda.utils.s3 import S3Path
 from sqlalchemy import exists, orm, select
@@ -202,17 +203,6 @@ def text_resources(slug):
     return render_template("texts/text-resources.html", text=text, exports=exports)
 
 
-@bp.route("/<slug>/validate")
-def validate_text(slug):
-    text = q.text(slug)
-    if text is None or not text.supports_text_export:
-        abort(404)
-    assert text
-
-    report = validate(text)
-    return render_template("texts/text-validate.html", text=text, report=report)
-
-
 @bp.route("/downloads/")
 def downloads():
     """Show all available downloads."""
@@ -326,6 +316,13 @@ def section(text_slug, section_slug):
     translations = [c for c in siblings if c.language != source_lang]
     commentaries = [c for c in siblings if c.language == source_lang]
 
+    validation_report = None
+    text_report = q.text_report(text_.id)
+    if text_report:
+        validation_report = safe_parse_report(text_report.payload)
+        if validation_report is None:
+            maybe_rerun_report(text_.id, current_app.config["AMBUDA_ENVIRONMENT"])
+
     return render_template(
         "texts/reader.html",
         text=text_,
@@ -343,4 +340,5 @@ def section(text_slug, section_slug):
         exports=exports,
         translations=translations,
         commentaries=commentaries,
+        validation_report=validation_report,
     )

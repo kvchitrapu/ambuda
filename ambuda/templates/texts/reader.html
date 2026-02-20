@@ -466,6 +466,32 @@ On wide screens, the sidebar is on the right side of a split view.
       </div>
       {% endif %}
       {% endif %}
+      {% if validation_report %}
+      {% set ns = namespace(passed=0, total=0) %}
+      {% for result in validation_report.results %}
+        {% if result.num_total > 0 %}
+          {% set ns.total = ns.total + 1 %}
+          {% if result.num_ok == result.num_total %}
+            {% set ns.passed = ns.passed + 1 %}
+          {% endif %}
+        {% endif %}
+      {% endfor %}
+      {% if ns.total > 0 %}
+        {% if ns.passed == ns.total %}
+          {% set bg = 'bg-green-100 text-green-800' %}
+        {% elif ns.passed == 0 %}
+          {% set bg = 'bg-red-100 text-red-800' %}
+        {% else %}
+          {% set bg = 'bg-yellow-100 text-yellow-800' %}
+        {% endif %}
+      <div class="mt-6">
+        <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">{{ _('Quality Report') }}</h3>
+        <a href="{{ url_for('proofing.text_report', slug=text.slug) }}"
+           class="inline-block text-sm font-medium px-2.5 py-1 rounded {{ bg }} hover:underline">{{ ns.passed }}/{{ ns.total }} {{ _('checks passed') }}</a>
+      </div>
+      {% endif %}
+      {% endif %}
+
       {% if raw_header %}
       <details class="mt-6">
         <summary class="text-sm text-slate-400 cursor-pointer select-none hover:text-slate-600">{{ _('Raw TEI header') }}</summary>

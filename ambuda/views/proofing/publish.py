@@ -740,6 +740,14 @@ def create(project_slug, text_slug):
         )
         task_dispatched = True
 
+        # Run quality report asynchronously.
+        from ambuda.tasks.text_validation import run_report
+
+        run_report.apply_async(
+            args=(text.id, current_app.config["AMBUDA_ENVIRONMENT"]),
+            headers={"initiated_by": current_user.username},
+        )
+
         if created_count > 0:
             flash(f"Created text '{text.slug}'.", "success")
         if updated_count > 0:

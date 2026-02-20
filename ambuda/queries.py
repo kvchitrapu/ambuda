@@ -8,7 +8,7 @@ import dataclasses as dc
 import functools
 
 from flask import current_app
-from sqlalchemy import create_engine, select
+from sqlalchemy import case, create_engine, func, select
 from sqlalchemy.orm import (
     load_only,
     scoped_session,
@@ -108,6 +108,14 @@ class Query:
         stmt = select(db.TextExport).filter_by(slug=slug)
         return self.session.scalars(stmt).first()
 
+    def text_report(self, text_id: int) -> db.TextReport | None:
+        stmt = (
+            select(db.TextReport)
+            .filter_by(text_id=text_id)
+            .order_by(db.TextReport.created_at.desc())
+        )
+        return self.session.scalars(stmt).first()
+
     def block(self, text_id: int, slug: str) -> db.TextBlock | None:
         stmt = select(db.TextBlock).filter_by(text_id=text_id, slug=slug)
         return self.session.scalars(stmt).first()
@@ -148,6 +156,118 @@ class Query:
         from ambuda.models.proofing import ProjectStatus
 
         stmt = select(db.Project).filter(db.Project.status == ProjectStatus.PENDING)
+        return list(self.session.scalars(stmt).all())
+
+    def paginated_projects(
+        self,
+        status: str = "active",
+        page: int = 1,
+        per_page: int = 25,
+        sort_field: str = "title",
+        sort_dir: str = "asc",
+        search: str = "",
+        genre_id: int | None = None,
+        tag_id: int | None = None,
+    ) -> tuple[list[db.Project], int]:
+        from ambuda.models.proofing import ProjectStatus, project_tag_association
+
+        status_map = {
+            "active": ProjectStatus.ACTIVE,
+            "pending": ProjectStatus.PENDING,
+            "closed-copy": ProjectStatus.CLOSED_COPYRIGHT,
+            "closed-duplicate": ProjectStatus.CLOSED_DUPLICATE,
+            "closed-quality": ProjectStatus.CLOSED_QUALITY,
+        }
+
+        base = select(db.Project)
+        if status != "all":
+            project_status = status_map.get(status, ProjectStatus.ACTIVE)
+            base = base.filter(db.Project.status == project_status)
+
+        if search:
+            like = f"%{search}%"
+            base = base.filter(
+                db.Project.display_title.ilike(like)
+                | db.Project.description.ilike(like)
+            )
+
+        if genre_id:
+            base = base.filter(db.Project.genre_id == genre_id)
+
+        if tag_id:
+            base = base.join(project_tag_association).filter(
+                project_tag_association.c.tag_id == tag_id
+            )
+
+        count_stmt = select(func.count()).select_from(base.subquery())
+        total = self.session.scalar(count_stmt) or 0
+
+        sort_map = {
+            "title": db.Project.display_title,
+            "created": db.Project.created_at,
+        }
+        sort_col = sort_map.get(sort_field, db.Project.display_title)
+        if sort_dir == "desc":
+            sort_col = sort_col.desc()
+
+        load_opts = load_only(
+            db.Project.id,
+            db.Project.display_title,
+            db.Project.slug,
+            db.Project.created_at,
+            db.Project.description,
+            db.Project.genre_id,
+        )
+
+        stmt = (
+            base.options(
+                load_opts,
+                selectinload(db.Project.genre),
+                selectinload(db.Project.tags),
+            )
+            .order_by(sort_col)
+            .limit(per_page)
+            .offset((page - 1) * per_page)
+        )
+
+        projects = list(self.session.scalars(stmt).all())
+        return projects, total
+
+    def project_tags(self) -> list[db.ProjectTag]:
+        return list(self.session.scalars(select(db.ProjectTag)).all())
+
+    def user_recent_projects(self, user_id: int, limit: int = 5) -> list[db.Project]:
+        stmt = (
+            select(db.Project)
+            .join(db.Revision, db.Revision.project_id == db.Project.id)
+            .filter(db.Revision.author_id == user_id)
+            .group_by(db.Project.id)
+            .order_by(func.max(db.Revision.created_at).desc())
+            .limit(limit)
+        )
+        return list(self.session.scalars(stmt).all())
+
+    def needs_help_projects(self, limit: int = 5) -> list[db.Project]:
+        from ambuda.models.proofing import ProjectStatus
+
+        r0_status = self.session.scalars(
+            select(db.PageStatus).filter(db.PageStatus.name == "reviewed-0")
+        ).first()
+        if not r0_status:
+            return []
+
+        total_pages = func.count(db.Page.id)
+        r0_pages = func.count(case((db.Page.status_id == r0_status.id, db.Page.id)))
+
+        stmt = (
+            select(db.Project)
+            .join(db.Page, db.Page.project_id == db.Project.id)
+            .filter(db.Project.status == ProjectStatus.ACTIVE)
+            .group_by(db.Project.id)
+            .having(total_pages > 0)
+            .order_by((r0_pages * 1.0 / total_pages).desc())
+            .limit(limit)
+        )
         return list(self.session.scalars(stmt).all())
 
     def project(self, slug: str) -> db.Project | None:
@@ -280,6 +400,11 @@ def text_export(slug: str) -> db.TextExport | None:
     return query.text_export(slug)
 
 
+def text_report(text_id: int) -> db.TextReport | None:
+    query = Query(get_session())
+    return query.text_report(text_id)
+
+
 def block(text_id: int, slug: str) -> db.TextBlock | None:
     query = Query(get_session())
     return query.block(text_id, slug)
@@ -316,6 +441,26 @@ def pending_projects() -> list[db.Project]:
     """Return all pending projects in no particular order."""
     query = Query(get_session())
     return query.pending_projects()
+
+
+def paginated_projects(**kwargs) -> tuple[list[db.Project], int]:
+    query = Query(get_session())
+    return query.paginated_projects(**kwargs)
+
+
+def project_tags() -> list[db.ProjectTag]:
+    query = Query(get_session())
+    return query.project_tags()
+
+
+def user_recent_projects(user_id: int, limit: int = 5) -> list[db.Project]:
+    query = Query(get_session())
+    return query.user_recent_projects(user_id, limit)
+
+
+def needs_help_projects(limit: int = 5) -> list[db.Project]:
+    query = Query(get_session())
+    return query.needs_help_projects(limit)
 
 
 def project(slug: str) -> db.Project | None:

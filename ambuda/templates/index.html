@@ -104,7 +104,7 @@
       {% for entry in recent_texts %}
       <li>
         <h2 class="flex justify-between items-baseline text-sm">
-          <span>
+          <span class="deva-serif">
             <a href="{{ url_for('texts.text', slug=entry.text.slug) }}" class="hover:underline">
               {{- entry.text.title | hk_to_user_script | devanagari_to_user_script -}}
             </a>
