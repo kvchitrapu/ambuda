@@ -94,7 +94,7 @@ export default () => ({
   // Internal application data that manages the application state.
 
   // If true, show the sidebar.
-  showSidebar: false,
+  showSidebar: true,
   sidebarTab: null,
   showSettings: false,
   // Text in the dictionary search field.
@@ -127,6 +127,7 @@ export default () => ({
         this.textWidth = settings.textWidth || this.textWidth;
         this.dictSources = settings.dictSources || this.dictSources;
         this.sidebarWidth = settings.sidebarWidth || this.sidebarWidth;
+        if (settings.showSidebar !== undefined) this.showSidebar = settings.showSidebar;
       } catch (error) {
         // Old settings are invalid -- rewrite with valid values.
         this.saveSettings();
@@ -141,6 +142,7 @@ export default () => ({
       textWidth: this.textWidth,
       dictSources: this.dictSources,
       sidebarWidth: this.sidebarWidth,
+      showSidebar: this.showSidebar,
     };
     localStorage.setItem(READER_CONFIG_KEY, JSON.stringify(settings));
   },

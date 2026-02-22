@@ -164,6 +164,13 @@ def create_project_from_local_pdf_inner(
 
     with get_db_session(app_environment, engine=engine) as (session, query, config_obj):
         slug = slugify(display_title)
+
+        RESERVED_SLUGS = {"texts", "dashboard", "recent-changes", "talk", "suggestions"}
+        if slug in RESERVED_SLUGS:
+            raise ValueError(
+                f'The slug "{slug}" is reserved. Please choose a different title.'
+            )
+
         stmt = select(db.Project).filter_by(slug=slug)
         project = session.scalars(stmt).first()
 

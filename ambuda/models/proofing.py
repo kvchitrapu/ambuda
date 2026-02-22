@@ -392,7 +392,9 @@ class Revision(Base):
     )
     #: Timestamp at which this revision was created.
     created_at: Mapped[datetime] = mapped_column(
-        default=lambda: datetime.now(UTC).replace(tzinfo=None), nullable=False
+        default=lambda: datetime.now(UTC).replace(tzinfo=None),
+        nullable=False,
+        index=True,
     )
     #: An optional editor summary for this revision.
     summary = Column(Text_, nullable=False, default="")

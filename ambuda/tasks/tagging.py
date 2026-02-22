@@ -20,7 +20,7 @@ from ambuda.tasks import app
 from ambuda.tasks.utils import get_db_session
 from ambuda.utils import revisions
 from ambuda.utils import dharmamitra as dm_utils
-from ambuda.utils.kosha import get_kosha
+from ambuda.utils.vidyut_loaders import get_kosha
 
 
 # Dharmamitra rate limit is 10 sentences per minute

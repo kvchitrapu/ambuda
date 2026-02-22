@@ -131,13 +131,11 @@ For the corresponding JavaScript bindings and logic, see `reader.js`.
     {% endif %}
   </div>
   <div class="flex items-center shrink-0">
-    <button @click="showSidebar = !showSidebar"
+    <button @click="showSidebar = !showSidebar; saveSettings()"
             class="flex items-center gap-1.5 text-slate-400 hover:text-slate-700 px-3 h-12 border-l"
-            title="{{ _('Sidebar') }}">
-      <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
-        <rect x="1" y="2" width="16" height="14" rx="2"/><line x1="11" y1="2" x2="11" y2="16"/>
-      </svg>
-      <span class="text-sm hidden sm:inline">{{ _('Sidebar') }}</span>
+            title="{{ _('Information') }}">
+      <svg width="18" height="18"><use href="#info"></use></svg>
+      <span class="text-sm hidden sm:inline">{{ _('Information') }}</span>
     </button>
     <button @click="showSettings = true"
             class="flex items-center gap-1.5 text-slate-400 hover:text-slate-700 px-3 h-12 border-l border-r"
@@ -173,11 +171,11 @@ On wide screens, the sidebar is on the right side of a split view.
   <div class="flex items-center shrink-0 border-b bg-white lg:bg-slate-50 px-3 h-10">
     <div class="flex items-center gap-1 text-sm min-w-0">
       <template x-if="sidebarTab === null">
-        <span class="text-slate-500 font-medium">{{ _('Sidebar') }}</span>
+        <span class="text-slate-500 font-medium">{{ _('Information') }}</span>
       </template>
       <template x-if="sidebarTab !== null && sidebarTab !== 'word-detail'">
         <div class="flex items-center gap-1 min-w-0">
-          <button class="text-slate-400 hover:text-slate-700 shrink-0" @click="sidebarTab = null">{{ _('Sidebar') }}</button>
+          <button class="text-slate-400 hover:text-slate-700 shrink-0" @click="sidebarTab = null">{{ _('Information') }}</button>
           <span class="text-slate-300 shrink-0">&rsaquo;</span>
           <span class="text-slate-500 truncate"
                 x-text="({
@@ -191,7 +189,7 @@ On wide screens, the sidebar is on the right side of a split view.
       </template>
       <template x-if="sidebarTab === 'word-detail'">
         <div class="flex items-center gap-1 min-w-0">
-          <button class="text-slate-400 hover:text-slate-700 shrink-0" @click="sidebarTab = null">{{ _('Sidebar') }}</button>
+          <button class="text-slate-400 hover:text-slate-700 shrink-0" @click="sidebarTab = null">{{ _('Information') }}</button>
           <span class="text-slate-300 shrink-0">&rsaquo;</span>
           <button class="text-slate-400 hover:text-slate-700 shrink-0" @click="sidebarTab = 'analyze'">{{ _('Analyze') }}</button>
           <span class="text-slate-300 shrink-0">&rsaquo;</span>
@@ -200,7 +198,7 @@ On wide screens, the sidebar is on the right side of a split view.
       </template>
     </div>
     <button class="ml-auto text-xl leading-none text-slate-400 hover:text-slate-700 shrink-0"
-            @click="showSidebar = false">&times;</button>
+            @click="showSidebar = false; saveSettings()">&times;</button>
   </div>
 
   <div class="flex-1 overflow-y-auto">
@@ -466,20 +464,10 @@ On wide screens, the sidebar is on the right side of a split view.
       </div>
       {% endif %}
       {% endif %}
-      {% if validation_report %}
-      {% set ns = namespace(passed=0, total=0) %}
-      {% for result in validation_report.results %}
-        {% if result.num_total > 0 %}
-          {% set ns.total = ns.total + 1 %}
-          {% if result.num_ok == result.num_total %}
-            {% set ns.passed = ns.passed + 1 %}
-          {% endif %}
-        {% endif %}
-      {% endfor %}
-      {% if ns.total > 0 %}
-        {% if ns.passed == ns.total %}
+      {% if report_summary and report_summary.num_total > 0 %}
+        {% if report_summary.num_passed == report_summary.num_total %}
           {% set bg = 'bg-green-100 text-green-800' %}
-        {% elif ns.passed == 0 %}
+        {% elif report_summary.num_passed == 0 %}
           {% set bg = 'bg-red-100 text-red-800' %}
         {% else %}
           {% set bg = 'bg-yellow-100 text-yellow-800' %}
@@ -487,9 +475,8 @@ On wide screens, the sidebar is on the right side of a split view.
       <div class="mt-6">
         <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">{{ _('Quality Report') }}</h3>
         <a href="{{ url_for('proofing.text_report', slug=text.slug) }}"
-           class="inline-block text-sm font-medium px-2.5 py-1 rounded {{ bg }} hover:underline">{{ ns.passed }}/{{ ns.total }} {{ _('checks passed') }}</a>
+           class="inline-block text-sm font-medium px-2.5 py-1 rounded {{ bg }} hover:underline">{{ report_summary.num_passed }}/{{ report_summary.num_total }} {{ _('checks passed') }}</a>
       </div>
-      {% endif %}
       {% endif %}
 
       {% if raw_header %}

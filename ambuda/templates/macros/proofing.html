@@ -186,12 +186,33 @@
 {% endmacro %}
 
 
+{# A batch of revisions in an activity log. #}
+{% macro batch_li(r, count) %}
+<li class="my-2">
+  {% set project_url = url_for('proofing.project.summary', slug=r.project.slug) %}
+  {% set batch_url = url_for('proofing.batch_detail', batch_id=r.batch_id) %}
+  {% set author_url = url_for('user.summary',
+      username=r.author.username) %}
+  {% set author = r.author.username %}
+
+  <span class="{{ revision_colors(r.status.name) }} inline-block w-2 h-2 mr-0.5 rounded-sm"></span>
+  <a class="text-slate-400 text-sm p-0.5 rounded"
+      href="{{ batch_url }}">{{ r.created.strftime("%Y-%m-%d %H:%M") }}</a>
+  <span class="text-xs bg-slate-200 text-slate-600 px-1 py-0.5 rounded">{{ _('batch') }}</span>
+  {{ _('<a href="%(project_url)s">%(project_title)s</a>: %(count)s pages edited by <a href="%(author_url)s">%(author)s</a>',
+    project_url=project_url, project_title=r.project.display_title, count=count, author_url=author_url, author=author) }}
+  {% if r.summary %}<i>({{ r.summary }})</i>{% endif %}
+</li>
+{% endmacro %}
+
+
 {# List various activity (edits, new projects, etc.) #}
 {% macro activity_log(activity) %}
 <ul class="a-hover-underline">
-{% for type_, _, obj in activity %}
-  {% if type_ == 'revision' %}{{ revision_li(obj) }}
-  {% elif type_ == 'project' %}{{ project_li(obj) }}
+{% for item in activity %}
+  {% if item[0] == 'revision' %}{{ revision_li(item[2]) }}
+  {% elif item[0] == 'batch' %}{{ batch_li(item[2], item[3]) }}
+  {% elif item[0] == 'project' %}{{ project_li(item[2]) }}
   {% endif %}
 {% endfor %}
 </ul>

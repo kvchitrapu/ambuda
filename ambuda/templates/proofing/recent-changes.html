@@ -10,8 +10,31 @@
 {{ m.header(_('Recent changes')) }}
 {{ m.proofing_tabs('recent-changes', current_user) }}
 
+{% macro pagination_nav() %}
+<nav class="flex justify-between items-center my-4 text-sm">
+  <div>
+    {% if prev_cursor %}
+    <a href="{{ url_for('proofing.recent_changes', after=prev_cursor) }}"
+       class="px-3 py-1 rounded border hover:bg-slate-100">&larr; {{ _('Newer') }}</a>
+    {% else %}
+    <span class="px-3 py-1 rounded border text-slate-300">&larr; {{ _('Newer') }}</span>
+    {% endif %}
+  </div>
+  <div>
+    {% if next_cursor %}
+    <a href="{{ url_for('proofing.recent_changes', before=next_cursor) }}"
+       class="px-3 py-1 rounded border hover:bg-slate-100">{{ _('Older') }} &rarr;</a>
+    {% else %}
+    <span class="px-3 py-1 rounded border text-slate-300">{{ _('Older') }} &rarr;</span>
+    {% endif %}
+  </div>
+</nav>
+{% endmacro %}
+
 {% if recent_activity -%}
+{{ pagination_nav() }}
 {{ m.activity_log(recent_activity) }}
+{{ pagination_nav() }}
 {% else %}
 <p class="text-slate-500">{{ _('No changes found.') }}</p>
 {% endif %}

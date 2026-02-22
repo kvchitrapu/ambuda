@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from ambuda import database as db
 from ambuda.tasks import app
 from ambuda.tasks.utils import get_db_session, get_redis
-from ambuda.utils.text_validation import validate, ValidationReport
+from ambuda.utils.text_validation import validate_text, ValidationReport
 
 REPORT_LOCK_TTL = 300  # seconds
 
@@ -27,14 +27,15 @@ def run_report_inner(
 
     ``engine`` is exposed for testing.
     """
-    with get_db_session(app_environment, engine=engine) as (session, q, _config):
+    with get_db_session(app_environment, engine=engine) as (session, q, config):
         text = session.get(db.Text, text_id)
         if not text:
             raise ValueError(f"Text with id {text_id} not found")
 
         logging.info(f"Running validation report for {text.slug}")
-        report = validate(text)
+        report = validate_text(text)
         payload = report.model_dump()
+        summary = report.summary.model_dump()
 
         # Upsert: update existing report or create new one.
         existing = (
@@ -47,12 +48,14 @@ def run_report_inner(
         now = datetime.now(UTC)
         if existing:
             existing.payload = payload
+            existing.summary = summary
             existing.updated_at = now
             logging.info(f"Updated existing TextReport for text {text.slug}")
         else:
             text_report = db.TextReport(
                 text_id=text_id,
                 payload=payload,
+                summary=summary,
                 created_at=now,
                 updated_at=now,
             )

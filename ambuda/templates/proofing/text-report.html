@@ -3,56 +3,119 @@
 {% import "macros/proofing.html" as m %}
 
 
-{% block title %}{{ mc.title(text.title ~ ' — ' ~ _('Validation Report')) }}{% endblock %}
+{% block title %}{{ mc.title(_('Reports') ~ ' » ' ~ text.title) }}{% endblock %}
 
 {% block content %}
-{{ m.header(text.title ~ ' — ' ~ _('Validation Report')) }}
+<header class="a-hover-underline font-bold text-3xl mt-12 mb-4">
+  <h1><a class="text-slate-400" href="/proofing/texts">{{ _('Reports') }}</a> &raquo; {{ text.title }}</h1>
+</header>
 
-<div class="mb-4 text-sm">
-  <a href="{{ url_for('texts.text', slug=text.slug) }}" class="text-sky-900 hover:underline">{{ text.title }}</a>
-  <span class="text-slate-300 mx-1">/</span>
-  <span class="text-slate-500">{{ _('Validation Report') }}</span>
+<div class="mb-4 text-sm flex items-center justify-between">
+  <div>
+    {% if updated_at %}
+    <span class="text-slate-400">{{ _('Updated %(time)s', time=updated_at.strftime('%Y-%m-%d %H:%M')) }}</span>
+    {% endif %}
+  </div>
+  {% if current_user.is_authenticated and current_user.is_p2 %}
+  <form method="post" action="{{ url_for('proofing.rerun_text_report', slug=text.slug) }}">
+    {{ form.csrf_token }}
+    <button type="submit" class="px-3 py-1 rounded border text-sm text-sky-800 bg-sky-50 hover:bg-sky-100">
+      {{ _('Re-run report') }}
+    </button>
+  </form>
+  {% endif %}
 </div>
 
-<div class="prose">
-  <div class="space-y-4 not-prose">
-    {% if not report %}
-      <p class="text-gray-500">{{ _('No validation report available. A report may be generating in the background — try refreshing in a moment.') }}</p>
+<div class="w-full max-w-none">
+  {% if not report %}
+    <p class="text-gray-500">{{ _('No validation report available. A report may be generating in the background — try refreshing in a moment.') }}</p>
+  {% endif %}
+
+  {% for group in (report.groups if report else []) %}
+    <h2 class="text-xl font-bold text-gray-800 mt-8 mb-3">{{ group.name }}</h2>
+    <div class="space-y-4">
+    {% for result in group.results %}
+
+    {% if result.num_total == 0 %}
+      {% set status_class = 'border-l-4 border-gray-300 bg-gray-50' %}
+      {% set icon = '—' %}
+      {% set icon_class = 'text-gray-400' %}
+      {% set status_text = 'N/A' %}
+    {% elif result.num_ok == result.num_total %}
+      {% set status_class = 'border-l-4 border-green-500 bg-green-50' %}
+      {% set icon = '✓' %}
+      {% set icon_class = 'text-green-700' %}
+      {% set status_text = 'Passed' %}
+    {% elif result.num_ok == 0 %}
+      {% set status_class = 'border-l-4 border-red-500 bg-red-50' %}
+      {% set icon = '✗' %}
+      {% set icon_class = 'text-red-700' %}
+      {% set status_text = 'Failed' %}
+    {% else %}
+      {% set status_class = 'border-l-4 border-orange-500 bg-orange-50' %}
+      {% set icon = '⚠' %}
+      {% set icon_class = 'text-orange-700' %}
+      {% set status_text = 'Partial' %}
     {% endif %}
-    {% for result in (report.results if report else []) %}
-      {% if result.num_ok == result.num_total %}
-        {% set status_class = 'border-l-4 border-green-500 bg-green-50' %}
-        {% set icon = '✓' %}
-        {% set icon_class = 'text-green-700' %}
-        {% set status_text = 'Passed' %}
-      {% elif result.num_ok == 0 %}
-        {% set status_class = 'border-l-4 border-red-500 bg-red-50' %}
-        {% set icon = '✗' %}
-        {% set icon_class = 'text-red-700' %}
-        {% set status_text = 'Failed' %}
-      {% else %}
-        {% set status_class = 'border-l-4 border-orange-500 bg-orange-50' %}
-        {% set icon = '⚠' %}
-        {% set icon_class = 'text-orange-700' %}
-        {% set status_text = 'Partial' %}
-      {% endif %}
 
-      <div class="p-4 {{ status_class }} rounded">
-        <div class="font-semibold text-gray-900">{{ result.description }}</div>
-        <div class="text-sm mt-1 {{ icon_class }}">
+    <details class="p-4 {{ status_class }} rounded">
+      <summary class="cursor-pointer select-none">
+        <span class="font-semibold text-gray-900">{{ result.description }}</span>
+        <span class="text-sm ml-2 {{ icon_class }}">
           <span class="font-bold">{{ icon }}</span> {{ status_text }} ({{ result.num_ok }}/{{ result.num_total }})
-        </div>
+        </span>
+      </summary>
 
-        {% if result.errors %}
-        <ul class="{{ icon_class }} text-sm">
-          {% for error in result.errors %}
-          <li>{{ error }}</li>
+      {% if result.errors %}
+      <div class="mt-3 space-y-3">
+        {% for detail in result.errors %}
+        <div class="bg-white border border-gray-200 rounded p-3 text-sm">
+
+          {% if detail.type == 'xml' %}
+          {% for msg in detail.messages %}
+          <div class="font-semibold text-gray-700 mb-1">{{ msg }}</div>
           {% endfor %}
-        </ul>
-        {% endif %}
+          {% if detail.xml %}
+          <pre class="bg-gray-100 text-gray-800 p-2 rounded text-xs overflow-x-auto">{{ detail.xml }}</pre>
+          {% endif %}
+
+          {% elif detail.type == 'token' %}
+          {% for msg in detail.messages %}
+          <div class="font-semibold text-gray-700 mb-1">{{ msg }}</div>
+          {% endfor %}
+
+          {% elif detail.type == 'chandas' %}
+          {% if detail.n %}
+          <div class="font-semibold text-gray-700 mb-1">Verse {{ detail.n }}</div>
+          {% endif %}
+          <pre class="bg-gray-100 text-gray-800 p-2 rounded text-xs overflow-x-auto mb-2">{{ detail.xml }}</pre>
+          {% if detail.scan %}
+          <table class="text-xs border-collapse">
+            {% for line in detail.scan %}
+            <tr>
+              {% for syl in line %}
+              <td class="px-1 py-0.5 border border-gray-200 text-center {% if syl.odd %}bg-yellow-100 ring-2 ring-yellow-400 ring-inset{% endif %}">
+                <div>{{ syl.text }}</div>
+                <div class="{% if syl.weight == 'G' %}text-red-600 font-bold{% else %}text-blue-600{% endif %}">{{ syl.weight }}</div>
+              </td>
+              {% endfor %}
+            </tr>
+            {% endfor %}
+          </table>
+          {% endif %}
+
+          {% else %}
+          <pre class="bg-gray-100 text-gray-800 p-2 rounded text-xs overflow-x-auto">{{ detail }}</pre>
+          {% endif %}
+
+        </div>
+        {% endfor %}
       </div>
+      {% endif %}
+    </details>
     {% endfor %}
-  </div>
+    </div>
+  {% endfor %}
 </div>
 
 {% endblock %}

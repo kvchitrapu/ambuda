@@ -83,8 +83,8 @@
         </td>
         <td class="px-3 py-2.5">
           {% if report %}
-            {% set num_ok = report.results | map(attribute='num_ok') | sum %}
-            {% set num_total = report.results | map(attribute='num_total') | sum %}
+            {% set num_ok = report.groups | map(attribute='results') | sum(start=[]) | map(attribute='num_ok') | sum %}
+            {% set num_total = report.groups | map(attribute='results') | sum(start=[]) | map(attribute='num_total') | sum %}
             {% if num_ok == num_total %}
               <a href="{{ url_for('proofing.text_report', slug=text.slug) }}"
                  class="inline-block text-xs font-medium px-2 py-0.5 rounded bg-green-100 text-green-800 hover:bg-green-200">
@@ -102,7 +102,10 @@
               </a>
             {% endif %}
           {% else %}
-            <span class="text-slate-300 text-xs">&mdash;</span>
+            <a href="{{ url_for('proofing.text_report', slug=text.slug) }}"
+               class="inline-block text-xs font-medium px-2 py-0.5 rounded bg-slate-100 text-slate-500 hover:bg-slate-200">
+              missing
+            </a>
           {% endif %}
         </td>
       </tr>

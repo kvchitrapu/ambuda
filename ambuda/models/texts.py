@@ -357,6 +357,8 @@ class TextReport(Base):
     updated_at = Column(DateTime, default=lambda: datetime.now(UTC), nullable=False)
     #: The validation report payload as JSON.
     payload = Column(JSON, nullable=False)
+    #: Lightweight summary: {"num_passed": int, "num_total": int}
+    summary = Column(JSON, nullable=True)
 
     text = relationship("Text", backref="reports")
 

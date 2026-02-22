@@ -15,6 +15,7 @@ from flask import (
     current_app,
     flash,
     make_response,
+    redirect,
     render_template,
     request,
     url_for,
@@ -32,6 +33,7 @@ from ambuda import database as db
 from ambuda import queries as q
 from ambuda.enums import SitePageStatus
 from ambuda.tasks import projects as project_tasks
+from ambuda.utils.text_validation import try_parse_text_report
 from ambuda.views.proofing.decorators import moderator_required, p2_required
 
 bp = Blueprint("proofing", __name__)
@@ -115,19 +117,26 @@ def dashboard():
     )
     num_texts = session.scalar(select(func.count(db.Text.id)))
 
+    thirty_days_ago = datetime.now(UTC) - timedelta(days=30)
+    num_texts_published_30d = session.scalar(
+        select(func.count(db.Text.id)).filter(db.Text.published_at >= thirty_days_ago)
+    )
+    num_texts_created_30d = session.scalar(
+        select(func.count(db.Text.id)).filter(db.Text.created_at >= thirty_days_ago)
+    )
+
     my_projects = []
     if current_user.is_authenticated:
         my_projects = q.user_recent_projects(current_user.id)
-
-    help_projects = q.needs_help_projects()
 
     return render_template(
         "proofing/dashboard.html",
         num_active_projects=num_active_projects,
         num_pending_projects=num_pending_projects,
         num_texts=num_texts,
+        num_texts_published_30d=num_texts_published_30d,
+        num_texts_created_30d=num_texts_created_30d,
         my_projects=my_projects,
-        help_projects=help_projects,
     )
 
 
@@ -394,49 +403,160 @@ def create_project_status(task_id):
     )
 
 
-def _get_recent_activity(num_per_page: int):
-    """Return a list of (kind, timestamp, object) tuples for recent activity."""
+def _revision_load_options():
+    return (
+        orm.defer(db.Revision.content),
+        orm.selectinload(db.Revision.author).load_only(db.User.username),
+        orm.selectinload(db.Revision.page).load_only(db.Page.slug),
+        orm.selectinload(db.Revision.project).load_only(
+            db.Project.slug, db.Project.display_title
+        ),
+        orm.selectinload(db.Revision.status).load_only(db.PageStatus.name),
+    )
+
+
+def _get_recent_activity(
+    num_per_page: int,
+    before: datetime | None = None,
+    after: datetime | None = None,
+):
+    """Return (activity_list, has_more) for cursor-based pagination."""
     bot_user = q.user(consts.BOT_USERNAME)
     assert bot_user, "Bot user not defined"
 
     session = q.get_session()
-    stmt = (
+
+    if after:
+        time_filter = lambda col: col > after  # noqa: E731
+        order = lambda col: col.asc()  # noqa: E731
+    else:
+        time_filter = (lambda col: col < before) if before else None  # noqa: E731
+        order = lambda col: col.desc()  # noqa: E731
+
+    individual_stmt = (
         select(db.Revision)
-        .options(
-            orm.defer(db.Revision.content),
-            orm.selectinload(db.Revision.author).load_only(db.User.username),
-            orm.selectinload(db.Revision.page).load_only(db.Page.slug),
-            orm.selectinload(db.Revision.project).load_only(
-                db.Project.slug, db.Project.display_title
-            ),
-            orm.selectinload(db.Revision.status).load_only(db.PageStatus.name),
+        .options(*_revision_load_options())
+        .filter(db.Revision.author_id != bot_user.id)
+        .filter(db.Revision.batch_id.is_(None))
+        .order_by(order(db.Revision.created_at))
+        .limit(num_per_page)
+    )
+    if time_filter:
+        individual_stmt = individual_stmt.filter(time_filter(db.Revision.created_at))
+    recent_activity = [
+        ("revision", r.created, r) for r in session.scalars(individual_stmt)
+    ]
+
+    batch_stmt = (
+        select(
+            db.Revision.batch_id,
+            func.count().label("revision_count"),
+            func.max(db.Revision.created_at).label("latest_created_at"),
         )
         .filter(db.Revision.author_id != bot_user.id)
-        .order_by(db.Revision.created_at.desc())
+        .filter(db.Revision.batch_id.isnot(None))
+        .group_by(db.Revision.batch_id)
+        .order_by(order(func.max(db.Revision.created_at)))
         .limit(num_per_page)
     )
-    recent_revisions = list(session.scalars(stmt).all())
-    recent_activity = [("revision", r.created, r) for r in recent_revisions]
+    if time_filter:
+        batch_stmt = batch_stmt.having(time_filter(func.max(db.Revision.created_at)))
+    batch_rows = session.execute(batch_stmt).all()
+    if batch_rows:
+        batch_counts = {row.batch_id: row.revision_count for row in batch_rows}
+        latest_per_batch = (
+            select(
+                db.Revision.batch_id,
+                func.max(db.Revision.id).label("max_id"),
+            )
+            .filter(db.Revision.batch_id.in_(list(batch_counts.keys())))
+            .group_by(db.Revision.batch_id)
+            .subquery()
+        )
+        rep_stmt = (
+            select(db.Revision)
+            .join(latest_per_batch, db.Revision.id == latest_per_batch.c.max_id)
+            .options(*_revision_load_options())
+        )
+        for r in session.scalars(rep_stmt):
+            recent_activity.append(("batch", r.created, r, batch_counts[r.batch_id]))
 
-    stmt = (
+    project_stmt = (
         select(db.Project)
         .options(orm.selectinload(db.Project.creator).load_only(db.User.username))
-        .order_by(db.Project.created_at.desc())
+        .order_by(order(db.Project.created_at))
         .limit(num_per_page)
     )
-    recent_projects = list(session.scalars(stmt).all())
-    recent_activity += [("project", p.created_at, p) for p in recent_projects]
+    if time_filter:
+        project_stmt = project_stmt.filter(time_filter(db.Project.created_at))
+    recent_activity += [
+        ("project", p.created_at, p) for p in session.scalars(project_stmt)
+    ]
 
     recent_activity.sort(key=lambda x: x[1], reverse=True)
-    return recent_activity[:num_per_page]
+    has_more = len(recent_activity) > num_per_page
+    return recent_activity[:num_per_page], has_more
+
+
+def _parse_cursor() -> tuple[datetime | None, datetime | None]:
+    try:
+        if before := request.args.get("before"):
+            return datetime.fromisoformat(before), None
+        if after := request.args.get("after"):
+            return None, datetime.fromisoformat(after)
+    except ValueError:
+        pass
+    return None, None
 
 
 @bp.route("/recent-changes")
 def recent_changes():
     """Show recent changes across all projects."""
-    recent_activity = _get_recent_activity(num_per_page=100)
+    num_per_page = 100
+    before, after = _parse_cursor()
+
+    recent_activity, has_more = _get_recent_activity(
+        num_per_page=num_per_page, before=before, after=after
+    )
+
+    next_cursor = prev_cursor = None
+    if recent_activity:
+        oldest_ts = recent_activity[-1][1].isoformat()
+        newest_ts = recent_activity[0][1].isoformat()
+        if after:
+            next_cursor = oldest_ts
+            prev_cursor = newest_ts if has_more else None
+        else:
+            next_cursor = oldest_ts if has_more else None
+            prev_cursor = newest_ts if before else None
+
     return render_template(
-        "proofing/recent-changes.html", recent_activity=recent_activity
+        "proofing/recent-changes.html",
+        recent_activity=recent_activity,
+        next_cursor=next_cursor,
+        prev_cursor=prev_cursor,
+    )
+
+
+@bp.route("/batch/<int:batch_id>")
+def batch_detail(batch_id):
+    """Show all revisions in a batch."""
+    session = q.get_session()
+    revisions = list(
+        session.scalars(
+            select(db.Revision)
+            .options(*_revision_load_options())
+            .filter(db.Revision.batch_id == batch_id)
+            .order_by(db.Revision.created_at.desc())
+        ).all()
+    )
+    if not revisions:
+        abort(404)
+
+    return render_template(
+        "proofing/batch-detail.html",
+        revisions=revisions,
+        batch_id=batch_id,
     )
 
 
@@ -454,7 +574,6 @@ def talk():
 @bp.route("/texts")
 def texts():
     """List all published texts."""
-    from ambuda.utils.text_validation import safe_parse_report
 
     session = q.get_session()
 
@@ -486,7 +605,7 @@ def texts():
     for t, tr in rows:
         all_texts.append(t)
         if tr:
-            report_map[t.id] = safe_parse_report(tr.payload)
+            report_map[t.id] = try_parse_text_report(tr.payload)
 
     return render_template(
         "proofing/texts.html",
@@ -498,21 +617,42 @@ def texts():
 @bp.route("/texts/<slug>/report")
 def text_report(slug):
     """Show validation report for a text."""
-    from ambuda.utils.text_validation import safe_parse_report
-    from ambuda.tasks.text_validation import maybe_rerun_report
 
     text = q.text(slug)
     if text is None:
         abort(404)
     assert text
 
+    text_report_ = q.text_report(text.id)
     report = None
-    text_report = q.text_report(text.id)
-    if text_report:
-        report = safe_parse_report(text_report.payload)
-        if report is None:
-            maybe_rerun_report(text.id, current_app.config["AMBUDA_ENVIRONMENT"])
-    return render_template("proofing/text-report.html", text=text, report=report)
+    updated_at = None
+    if text_report_:
+        report = try_parse_text_report(text_report_.payload)
+        updated_at = text_report_.updated_at
+    return render_template(
+        "proofing/text-report.html",
+        text=text,
+        report=report,
+        form=FlaskForm(),
+        updated_at=updated_at,
+    )
+
+
+@bp.route("/texts/<slug>/report/rerun", methods=["POST"])
+@p2_required
+def rerun_text_report(slug):
+    """Trigger a re-run of the validation report for a text."""
+    from ambuda.tasks.text_validation import maybe_rerun_report
+
+    text = q.text(slug)
+    if text is None:
+        abort(404)
+
+    if maybe_rerun_report(text.id, current_app.config["AMBUDA_ENVIRONMENT"]):
+        flash("Report re-run started. Refresh in a moment to see updated results.")
+    else:
+        flash("A report re-run is already in progress.")
+    return redirect(url_for("proofing.text_report", slug=slug))
 
 
 @bp.route("/admin/dashboard/")

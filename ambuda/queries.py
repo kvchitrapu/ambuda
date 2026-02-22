@@ -116,6 +116,15 @@ class Query:
         )
         return self.session.scalars(stmt).first()
 
+    def text_report_summary(self, text_id: int) -> dict | None:
+        """Fetch just the summary JSON for a text report (avoids loading the full payload)."""
+        stmt = (
+            select(db.TextReport.summary)
+            .filter_by(text_id=text_id)
+            .order_by(db.TextReport.created_at.desc())
+        )
+        return self.session.scalar(stmt)
+
     def block(self, text_id: int, slug: str) -> db.TextBlock | None:
         stmt = select(db.TextBlock).filter_by(text_id=text_id, slug=slug)
         return self.session.scalars(stmt).first()
@@ -403,6 +412,11 @@ def text_export(slug: str) -> db.TextExport | None:
 def text_report(text_id: int) -> db.TextReport | None:
     query = Query(get_session())
     return query.text_report(text_id)
+
+
+def text_report_summary(text_id: int) -> dict | None:
+    query = Query(get_session())
+    return query.text_report_summary(text_id)
 
 
 def block(text_id: int, slug: str) -> db.TextBlock | None:

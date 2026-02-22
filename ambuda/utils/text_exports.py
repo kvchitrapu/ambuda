@@ -165,98 +165,39 @@ def create_xml_file(text: db.Text, out_path: Path) -> None:
     """Create a TEI XML file from the given path.
 
     TEI XML is our canonical file export format from which all other exports are derived.
-    It contains structured text data and rich metadata.
+    It contains structured text data and rich metadata.  The teiHeader is taken directly
+    from the text's stored header.
     """
 
     with etree.xmlfile(out_path, encoding="utf-8") as xf:
         xf.write_declaration()
 
         with xf.element("TEI", xmlns="http://www.tei-c.org/ns/1.0"):
-            with xf.element("teiHeader"):
-                with xf.element("fileDesc"):
-                    with xf.element("titleStmt"):
-                        with xf.element("title"):
-                            xf.write(text.title)
-                        with xf.element("title"):
-                            xf.write("A machine-readable edition")
-                        with xf.element("author"):
-                            xf.write(text.author.name if text.author else "(missing)")
-                        with xf.element("respStmt"):
-                            with xf.element("persName"):
-                                # For now, just me. Change this in the future.
-                                xf.write("Arun Prasad")
-                            with xf.element("resp"):
-                                xf.write("Creation of machine-readable version.")
-
-                    with xf.element("publicationStmt"):
-                        with xf.element("authority"):
-                            xf.write("Ambuda (https://ambuda.org)")
-                        with xf.element("availability"):
-                            xf.write("TODO")
-                        with xf.element("date"):
-                            # For now, hard-code the current year.
-                            xf.write("2026")
-
-                    with xf.element("notesStmt"):
-                        with xf.element("note"):
-                            if text.project_id is not None:
-                                xf.write(
-                                    "This text has been created by direct export from Ambuda's proofing environment."
-                                )
-                            else:
-                                xf.write(
-                                    "This text has been created by third-party import from another site."
-                                )
-
-                    with xf.element("sourceDesc"):
-                        with xf.element("title"):
-                            xf.write("TODO: book title")
-                        with xf.element("author"):
-                            xf.write("TODO: book author")
-                        with xf.element("editor"):
-                            with xf.element("name"):
-                                xf.write("TODO: book editor")
-                        with xf.element("publisher"):
-                            xf.write("TODO: book publisher")
-                        with xf.element("pubPlace"):
-                            xf.write("TODO: publisher location")
-                        with xf.element("date"):
-                            xf.write("TODO: book date")
-                # </fileDesc>
-
-                with xf.element("encodingDesc"):
-                    with xf.element("projectDesc"):
-                        with xf.element("p"):
-                            xf.write(
-                                "Ambuda is an online library of Sanskrit literature."
-                            )
-                    with xf.element("refsDecl"):
+            if text.header:
+                xf.write(etree.fromstring(text.header))
+            else:
+                with xf.element("teiHeader"):
+                    with xf.element("fileDesc"):
                         pass
-                # </encodingDesc>
 
-                with xf.element("revisionDesc"):
-                    pass
-                # </revisionDesc>
-
-            # Main text
             session = object_session(text)
             assert session
 
-            text_id = "TODO"
-            text_lang = "TODO"
-            with xf.element("text", {"xml:id": text_id, "xml:lang": text_lang}):
+            with xf.element(
+                "text",
+                {"xml:id": text.slug, "xml:lang": text.language or "sa"},
+            ):
                 with xf.element("body"):
                     safe_parser = etree.XMLParser(
-                        resolve_entities=False, load_dtd=False
+                        resolve_entities=False, load_dtd=False, recover=True
                     )
                     for section in text.sections:
-                        for block in section.blocks:
-                            el = etree.fromstring(block.xml, safe_parser)
-                            el.set("n", block.slug)
-                            xf.write(el)
+                        with xf.element("div", n=section.slug):
+                            for block in section.blocks:
+                                el = etree.fromstring(block.xml, safe_parser)
+                                el.set("n", block.slug)
+                                xf.write(el)
                         session.expire(section)
-            # </text>
-        # </TEI>
 
 
 def create_plain_text(text: db.Text, file_path: Path, xml_path: Path) -> None:
@@ -276,7 +217,7 @@ def create_plain_text(text: db.Text, file_path: Path, xml_path: Path) -> None:
         ns = "{http://www.tei-c.org/ns/1.0}"
         for event, elem in etree.iterparse(str(xml_path), events=("end",)):
             parent = elem.getparent()
-            if parent is not None and parent.tag == f"{ns}body":
+            if parent is not None and parent.tag in (f"{ns}body", f"{ns}div"):
                 slug = elem.get("n")
                 if not slug:
                     continue
@@ -339,7 +280,7 @@ def create_pdf(
         ns = "{http://www.tei-c.org/ns/1.0}"
         for event, elem in etree.iterparse(str(xml_path), events=("end",)):
             parent = elem.getparent()
-            if parent is not None and parent.tag == f"{ns}body":
+            if parent is not None and parent.tag in (f"{ns}body", f"{ns}div"):
                 slug = elem.get("n")
                 if slug is None:
                     continue
@@ -520,12 +461,20 @@ def delete_cached_xml(cache_dir: str | None, text_slug: str) -> None:
     path.unlink(missing_ok=True)
 
 
-def read_cached_xml(cache_dir: str | None, text_slug: str) -> str | None:
-    """Read an XML file from the local file cache, or return None."""
+def cached_xml_path(cache_dir: str | None, text_slug: str) -> Path | None:
+    """Return the path to a cached XML file, or None if it doesn't exist."""
     if not cache_dir:
         return None
     path = Path(cache_dir) / "published-texts" / f"{text_slug}.xml"
     if path.exists():
+        return path
+    return None
+
+
+def read_cached_xml(cache_dir: str | None, text_slug: str) -> str | None:
+    """Read an XML file from the local file cache, or return None."""
+    path = cached_xml_path(cache_dir, text_slug)
+    if path:
         return path.read_text(encoding="utf-8")
     return None
 
