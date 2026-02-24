@@ -34,9 +34,10 @@ class TaskStatus:
         raise NotImplementedError
 
     def success(self, num_pages: int, slug: str, **extra):
-        """Mark the task as a success.
+        """Mark the task as a success and return a result dict.
 
-        # FIXME(arun): make this API more generic.
+        Celery task wrappers must ``return`` whatever this method returns
+        so that the result is stored as the task's final result.
         """
         raise NotImplementedError
 
@@ -64,10 +65,16 @@ class CeleryTaskStatus(TaskStatus):
         self.task.update_state(state="PROGRESS", meta=meta)
 
     def success(self, num_pages: int, slug: str, **extra):
-        """Mark the task as a success."""
+        """Mark the task as a success.
+
+        Returns the result dict. The Celery task wrapper MUST return this
+        value so that Celery stores it as the task result. (Calling
+        ``update_state(state=SUCCESS)`` is overwritten by the task's
+        implicit ``None`` return value.)
+        """
         meta = {"current": num_pages, "total": num_pages, "slug": slug}
         meta.update(extra)
-        self.task.update_state(state=states.SUCCESS, meta=meta)
+        return meta
 
     def failure(self, message: str):
         """Mark the task as failed."""

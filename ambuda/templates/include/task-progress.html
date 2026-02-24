@@ -6,26 +6,54 @@
 </div>
 {% endmacro %}
 
+{% macro project_list(projects) %}
+<ul class="list-disc ml-6 mt-2">
+  {% for p in projects %}
+    <li>
+      {% if p.status == 'success' %}
+        <a href="{{ url_for('proofing.project.summary', slug=p.slug) }}">{{ p.title }}</a>
+      {% else %}
+        <span class="text-red-600">{{ p.title }} &mdash; failed: {{ p.error }}</span>
+      {% endif %}
+    </li>
+  {% endfor %}
+</ul>
+{% endmacro %}
+
 {# kwargs: current, total, percent #}
 {% if status == 'FAILURE' %}
   {% call components.div_warning() %}
-  <p class="!mb-0">We weren't able to upload your project. Usually, this occurs
-  if a project with the same name already exists. If you believe this is an
-  error, please <a href="{{ url_for('about.contact') }}">let us know</a> and
-  we'll fix the error as soon as we can.
+  <p>We weren't able to upload your project.</p>
+  {% if error_message %}
+    <p class="mt-2 font-mono text-sm">{{ error_message }}</p>
+  {% endif %}
+  <p class="!mb-0 mt-2">If you believe this is an error, please
+  <a href="{{ url_for('about.contact') }}">let us know</a> and
+  we'll fix it as soon as we can.</p>
   {% endcall %}
 
 {% elif status == 'PROGRESS' %}
   {{ progress_bar(percent) }}
-  <p>Rendered {{ current }} of {{ total }} total pages.</p>
-  {% if upload_total is defined and upload_total > 0 %}
-    {{ progress_bar(upload_percent) }}
-    <p>Uploaded {{ upload_current }} of {{ upload_total }} pages to cloud storage.</p>
+  {% if multi_upload %}
+    <p>Processed {{ current }} of {{ total }} PDFs.</p>
+    {% if completed_projects %}
+      <h4 class="font-semibold mt-4">Progress by PDF:</h4>
+      {{ project_list(completed_projects) }}
+    {% endif %}
+  {% else %}
+    <p>Rendered {{ current }} of {{ total }} total pages.</p>
+    {% if upload_total is defined and upload_total > 0 %}
+      {{ progress_bar(upload_percent) }}
+      <p>Uploaded {{ upload_current }} of {{ upload_total }} pages to cloud storage.</p>
+    {% endif %}
   {% endif %}
 
 {% elif status == 'SUCCESS' %}
   {{ progress_bar(100) }}
-  {% if slug %}
+  {% if multi_upload and completed_projects %}
+    <p>Upload complete.</p>
+    {{ project_list(completed_projects) }}
+  {% elif slug %}
     <p>Upload complete. <a href="{{ url_for('proofing.project.summary',
       slug=slug) }}">Click here</a> to view your new project.</p>
   {% else %}
@@ -35,6 +63,10 @@
 
 {% else %}
   {{ progress_bar(0) }}
-  <p>Beginning upload &hellip;</p>
+  {% if queue_length is defined and queue_length > 0 %}
+    <p>Your task is in the queue. There {{ 'is' if queue_length == 1 else 'are' }} {{ queue_length }} task(s) ahead.</p>
+  {% else %}
+    <p>Beginning upload &hellip;</p>
+  {% endif %}
 
 {% endif %}

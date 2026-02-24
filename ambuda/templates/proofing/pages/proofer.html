@@ -53,7 +53,7 @@
 
 
 {% macro _devanagari_char_row(chars, class) %}
-<div class="text-xl grid {{ class }}">
+<div class="text-xl grid deva-serif {{ class }}">
 {% for char in chars.split() %}
   <button class="hover:bg-sky-500 rounded p-1">{{ char|safe }}</button>
 {% endfor %}
@@ -464,7 +464,7 @@
       <div :style="'flex: ' + splitPercent + ' 1 0%'" class="flex flex-col min-h-0 overflow-hidden">
         <div class="border border-r-slate-400 flex flex-col min-h-0 h-full">
           <div class="p-2 md:p-4 flex-1 min-h-0 overflow-y-scroll">
-            <div id="prosemirror-editor" class="prosemirror-editor deva-serif"></div>
+            <div id="prosemirror-editor" class="prosemirror-editor"></div>
             <textarea id="content" name="content" required="" style="display: none;">{{ form.content.data }}</textarea>
           </div>
         </div>

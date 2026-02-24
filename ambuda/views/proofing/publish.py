@@ -10,7 +10,7 @@ from pathlib import Path
 from lxml import etree
 from xml.etree import ElementTree as ET
 
-from slugify import slugify
+from ambuda.utils.slug import title_to_slug
 from flask import (
     Blueprint,
     current_app,
@@ -539,7 +539,9 @@ def create(project_slug, text_slug):
                 sqla.select(db.Author).where(db.Author.name == config.author)
             ).scalar_one_or_none()
             if not author:
-                author = db.Author(name=config.author, slug=slugify(config.author))
+                author = db.Author(
+                    name=config.author, slug=title_to_slug(config.author)
+                )
                 session.add(author)
                 session.flush()
             text.author_id = author.id

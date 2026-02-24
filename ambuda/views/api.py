@@ -155,6 +155,73 @@ def auto_structure_api():
         return jsonify({"error": "Auto-structuring failed"}), 500
 
 
+def _check_one_verse(text: str, chandas, checker) -> dict:
+    """Check meter for a single verse. Returns a result dict."""
+    from vidyut.lipi import Scheme, transliterate
+
+    from ambuda.utils.text_validation import MeterCheck
+
+    text = text.strip()
+    if not text:
+        return {"ok": False, "scan": []}
+
+    slp1 = transliterate(text, Scheme.Devanagari, Scheme.Slp1)
+
+    if len(slp1) > MeterCheck._MAX_CLASSIFY_LEN:
+        return {"ok": False, "scan": [], "error": "Verse too long"}
+
+    try:
+        match = chandas.classify(slp1)
+    except BaseException as exc:
+        current_app.logger.warning("Chandas error in meter-check API: %s", exc)
+        return {"ok": False, "scan": [], "error": str(exc)}
+
+    if match.padya:
+        return {"ok": True, "meter": match.padya}
+
+    if MeterCheck._is_shloka(match.aksharas):
+        return {"ok": True, "meter": "Shloka"}
+
+    if MeterCheck._is_tristubh(match.aksharas):
+        return {"ok": True, "meter": "Trishtubh"}
+
+    scan = [
+        [
+            {
+                "text": transliterate(a.text, Scheme.Slp1, Scheme.Devanagari),
+                "weight": a.weight,
+            }
+            for a in line_aksharas
+        ]
+        for line_aksharas in match.aksharas
+    ]
+    checker._mark_odd_aksharas(scan)
+    return {"ok": False, "scan": scan}
+
+
+@bp.route("/proofing/meter-check", methods=["POST"])
+@login_required
+def meter_check_api():
+    """Check the meter of a batch of Devanagari verses.
+
+    Accepts {"verses": ["...", ...]}. Returns {"results": [...]}.
+    """
+    from ambuda.utils.text_validation import MeterCheck, _get_chandas
+
+    data = request.get_json()
+    if not data or "verses" not in data:
+        return jsonify({"error": "Missing 'verses' field"}), 400
+
+    verses = data["verses"]
+    if not isinstance(verses, list):
+        return jsonify({"error": "'verses' must be an array"}), 400
+
+    chandas = _get_chandas()
+    checker = MeterCheck()
+    results = [_check_one_verse(v, chandas, checker) for v in verses]
+    return jsonify({"results": results})
+
+
 @bp.route("/proofing/tags")
 def proofing_tags_api():
     """Return all existing project tags."""

@@ -47,6 +47,9 @@ const DIACRITICS_RE = new RegExp(`[${Object.keys(DIACRITICS).join('')}]`, 'g');
 export function titleToSlug(str) {
   if (!str) return '';
   let s = toHK(str) || str;
+  // HK nasals: G (ṅ) → n, J (ñ) → n, M (ṃ) → m before pavarga/zavarsa, else n
+  s = s.replace(/G/g, 'n').replace(/J/g, 'n');
+  s = s.replace(/M(?=[pbhzSs])/g, 'm').replace(/M/g, 'n');
   // HK uses z for ś and S for ṣ — replace before lowercasing
   s = s.replace(/z/g, 'sh').replace(/S/g, 'sh');
   s = s.toLowerCase();

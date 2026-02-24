@@ -22,6 +22,8 @@ export default {
 
   proofingAutoStructure: () => '/api/proofing/auto-structure',
 
+  proofingMeterCheck: () => '/api/proofing/meter-check',
+
   proofingPageData: (projectSlug, pageSlug) => `/api/proofing/${projectSlug}/${pageSlug}/page-data`,
 
   proofingSave: (projectSlug, pageSlug) => `/api/proofing/${projectSlug}/${pageSlug}/save`,

@@ -1,0 +1,27 @@
+{% extends 'base-text.html' %}
+
+{% block title %}Authors{% endblock %}
+
+{% block main %}
+<article class="p-4 md:p-0 max-w-3xl mx-auto md:my-24 md:mb-36">
+  <header class="deva-serif">
+    <h1 class="font-bold text-4xl text-center my-16">Authors</h1>
+  </header>
+  {% for author, texts in authors_with_texts %}
+  <section class="mb-12">
+    <h2 class="deva-serif font-bold text-2xl mb-2">
+      <a href="{{ url_for('authors.author', slug=author.slug) }}" class="hover:underline">{{ author.name }}</a>
+    </h2>
+    <ul class="divide-y divide-slate-200 deva-serif">
+      {% for text in texts %}
+      <li class="py-3 px-2 hover:bg-slate-50 rounded">
+        <a href="{{ url_for('texts.text', slug=text.slug) }}" class="hover:underline text-xl">
+          {{- text.title | hk_to_user_script | devanagari_to_user_script -}}
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endfor %}
+</article>
+{% endblock %}

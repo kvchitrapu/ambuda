@@ -14,6 +14,7 @@ from flask import (
     abort,
     current_app,
     flash,
+    jsonify,
     make_response,
     redirect,
     render_template,
@@ -53,6 +54,15 @@ def _required_if_url(message: str):
     return fn
 
 
+def _required_if_multi_url(message: str):
+    def fn(form, field):
+        source = form.pdf_source.data
+        if source == "multi_url" and not field.data:
+            raise ValidationError(message)
+
+    return fn
+
+
 def _required_if_gdrive(message: str):
     def fn(form, field):
         source = form.pdf_source.data
@@ -77,6 +87,7 @@ class CreateProjectForm(FlaskForm):
         choices=[
             ("url", "Upload from a URL"),
             ("local", "Upload from my computer"),
+            ("multi_url", "Upload from multiple URLs"),
             # TODO: support this later, maybe too powerful for the average user.
             # ("gdrive", "Upload from a Google Drive folder"),
         ],
@@ -85,6 +96,13 @@ class CreateProjectForm(FlaskForm):
     pdf_url = StringField(
         "PDF URL",
         validators=[_required_if_url("Please provide a valid PDF URL.")],
+    )
+    pdf_urls = StringField(
+        "PDF URLs (one per line)",
+        widget=TextArea(),
+        validators=[
+            _required_if_multi_url("Please provide at least one PDF URL."),
+        ],
     )
     # gdrive_folder_url = StringField(
     # "Google Drive folder URL",
@@ -95,7 +113,13 @@ class CreateProjectForm(FlaskForm):
     local_file = FileField(
         "PDF file", validators=[_required_if_local("Please provide a PDF file.")]
     )
-    display_title = StringField("Display title (optional)")
+    display_title = StringField(
+        "Display title",
+        validators=[
+            _required_if_url("Please provide a title for the project."),
+            _required_if_local("Please provide a title for the project."),
+        ],
+    )
 
 
 @bp.route("/dashboard")
@@ -266,8 +290,6 @@ def index():
     )
 
     if request.args.get("partial"):
-        from flask import jsonify
-
         html = render_template("proofing/index_projects.html", **template_vars)
         return jsonify(html=html, total=total)
 
@@ -314,6 +336,42 @@ def create_project():
 
     display_title = form.display_title.data or None
 
+    if pdf_source == "multi_url":
+        raw_lines = form.pdf_urls.data or ""
+        lines = [l.strip() for l in raw_lines.splitlines() if l.strip()]
+        if not lines:
+            flash("Please provide at least one entry.")
+            return render_template("proofing/create-project.html", form=form)
+
+        urls = []
+        titles = []
+        for i, line in enumerate(lines, start=1):
+            if "|" not in line:
+                flash(f"Line {i}: expected format 'Title | URL' but no '|' found.")
+                return render_template("proofing/create-project.html", form=form)
+            title_part, url_part = line.split("|", 1)
+            title_part = title_part.strip()
+            url_part = url_part.strip()
+            if not title_part:
+                flash(f"Line {i}: title is missing.")
+                return render_template("proofing/create-project.html", form=form)
+            if not url_part:
+                flash(f"Line {i}: URL is missing.")
+                return render_template("proofing/create-project.html", form=form)
+            titles.append(title_part)
+            urls.append(url_part)
+
+        task = project_tasks.create_projects_from_urls.apply_async(
+            kwargs=dict(
+                pdf_urls=urls,
+                display_titles=titles,
+                creator_id=current_user.id,
+                app_environment=current_app.config["AMBUDA_ENVIRONMENT"],
+            ),
+            headers={"initiated_by": current_user.username},
+        )
+        return redirect(url_for("proofing.upload_status", task_id=task.id))
+
     if pdf_source == "url":
         pdf_url = form.pdf_url.data
         task = project_tasks.create_project_from_url.apply_async(
@@ -359,36 +417,71 @@ def create_project():
             ),
             headers={"initiated_by": current_user.username},
         )
+    return redirect(url_for("proofing.upload_status", task_id=task.id))
+
+
+@bp.route("/upload-status/<task_id>")
+def upload_status(task_id):
+    """Full status page for a project upload task.
+
+    The task ID is in the URL so users can bookmark or share this page.
+    """
     return render_template(
         "proofing/create-project-post.html",
-        stauts=task.status,
-        current=0,
-        total=0,
-        percent=0,
-        task_id=task.id,
+        task_id=task_id,
     )
+
+
+@bp.route("/check-title")
+def check_title():
+    """AJAX endpoint: check if a project with a similar title already exists."""
+    title = request.args.get("title", "").strip()
+    if not title:
+        return jsonify(exists=False, slug="")
+    slug = slugify(title)
+    session = q.get_session()
+    existing = session.scalars(select(db.Project).filter_by(slug=slug)).first()
+    return jsonify(exists=existing is not None, slug=slug)
 
 
 @bp.route("/status/<task_id>")
 def create_project_status(task_id):
     """AJAX summary of the task."""
     from ambuda.tasks import app as celery_app
+    from ambuda.tasks.utils import get_redis
 
     r = celery_app.AsyncResult(task_id)
 
     info = r.info or {}
+    completed_projects = []
+    multi_upload = False
+    queue_length = 0
+
+    error_message = None
     if isinstance(info, Exception):
         current = total = percent = 0
         slug = None
         upload_current = upload_total = upload_percent = 0
+        error_message = (
+            f"{type(info).__name__}: {info}" if str(info) else type(info).__name__
+        )
     else:
         current = info.get("current", 100)
         total = info.get("total", 100)
         slug = info.get("slug", None)
-        percent = 100 * current / total
+        percent = 100 * current / total if total else 0
         upload_current = info.get("upload_current", 0)
         upload_total = info.get("upload_total", 0)
         upload_percent = 100 * upload_current / upload_total if upload_total else 0
+        completed_projects = info.get("completed_projects", [])
+        multi_upload = info.get("multi_upload", False)
+
+    if r.status == "PENDING":
+        try:
+            redis_client = get_redis()
+            queue_length = redis_client.llen("celery")
+        except Exception:
+            queue_length = 0
 
     return render_template(
         "include/task-progress.html",
@@ -400,6 +493,10 @@ def create_project_status(task_id):
         upload_current=upload_current,
         upload_total=upload_total,
         upload_percent=upload_percent,
+        completed_projects=completed_projects,
+        multi_upload=multi_upload,
+        queue_length=queue_length,
+        error_message=error_message,
     )
 
 

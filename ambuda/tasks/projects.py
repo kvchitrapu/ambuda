@@ -26,7 +26,12 @@ from sqlalchemy import select
 from ambuda import database as db
 from ambuda.utils.s3 import S3Path
 from ambuda.tasks import app
-from ambuda.tasks.utils import CeleryTaskStatus, TaskStatus, get_db_session
+from ambuda.tasks.utils import (
+    CeleryTaskStatus,
+    LocalTaskStatus,
+    TaskStatus,
+    get_db_session,
+)
 
 
 def _save_page_image(
@@ -78,6 +83,31 @@ def _split_pdf_into_pages(
         task_status.progress(n + 1, num_pages)
 
     return page_uuids
+
+
+RESERVED_SLUGS = {"texts", "dashboard", "recent-changes", "talk", "suggestions"}
+
+
+def _generate_unique_slug(session, display_title: str) -> str:
+    """Generate a unique project slug from a display title.
+
+    If the base slug collides with an existing project or a reserved slug,
+    appends an incrementing numeric suffix (e.g. ``my-title-2``).
+    """
+    base_slug = slugify(display_title)
+    slug = base_slug
+    suffix = 2
+    while True:
+        if slug in RESERVED_SLUGS:
+            slug = f"{base_slug}-{suffix}"
+            suffix += 1
+            continue
+        existing = session.scalars(select(db.Project).filter_by(slug=slug)).first()
+        if not existing:
+            break
+        slug = f"{base_slug}-{suffix}"
+        suffix += 1
+    return slug
 
 
 def _add_project_to_database(
@@ -163,21 +193,7 @@ def create_project_from_local_pdf_inner(
         display_title = f"Project {hash_prefix} ({timestamp})"
 
     with get_db_session(app_environment, engine=engine) as (session, query, config_obj):
-        slug = slugify(display_title)
-
-        RESERVED_SLUGS = {"texts", "dashboard", "recent-changes", "talk", "suggestions"}
-        if slug in RESERVED_SLUGS:
-            raise ValueError(
-                f'The slug "{slug}" is reserved. Please choose a different title.'
-            )
-
-        stmt = select(db.Project).filter_by(slug=slug)
-        project = session.scalars(stmt).first()
-
-        if project:
-            raise ValueError(
-                f'Project "{display_title}" already exists. Please choose a different title.'
-            )
+        slug = _generate_unique_slug(session, display_title)
 
         upload_folder = getattr(config_obj, "UPLOAD_FOLDER", None)
         if upload_folder:
@@ -198,6 +214,7 @@ def create_project_from_local_pdf_inner(
         )
 
         # Move assets to s3.
+        stmt = select(db.Project).filter_by(slug=slug)
         project = session.scalars(stmt).first()
         if not project:
             raise ValueError(f"Could not create project {display_title}")
@@ -245,7 +262,7 @@ def create_project_from_local_pdf_inner(
         else:
             logging.info(f"No s3 bucket found")
 
-    task_status.success(len(page_uuids), slug)
+    return task_status.success(len(page_uuids), slug)
 
 
 @app.task(bind=True)
@@ -263,7 +280,7 @@ def create_project_from_local_pdf(
     For argument details, see `create_project_from_local_pdf_inner`.
     """
     task_status = CeleryTaskStatus(self)
-    create_project_from_local_pdf_inner(
+    return create_project_from_local_pdf_inner(
         pdf_path=pdf_path,
         display_title=display_title,
         creator_id=creator_id,
@@ -302,8 +319,13 @@ def create_project_from_url_inner(
             with open(temp_pdf_path, "wb") as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
+    except Exception as e:
+        if temp_pdf_path.exists():
+            temp_pdf_path.unlink()
+        raise ValueError(f"Failed to download PDF from {pdf_url}: {e}") from e
 
-        create_project_from_local_pdf_inner(
+    try:
+        return create_project_from_local_pdf_inner(
             pdf_path=str(temp_pdf_path),
             display_title=display_title,
             app_environment=app_environment,
@@ -312,10 +334,10 @@ def create_project_from_url_inner(
             source_url=pdf_url,
             engine=engine,
         )
-    except Exception as e:
+    except Exception:
         if temp_pdf_path.exists():
             temp_pdf_path.unlink()
-        raise ValueError(f"Failed to download PDF from URL: {e}")
+        raise
 
 
 @app.task(bind=True)
@@ -332,12 +354,129 @@ def create_project_from_url(
     For argument details, see `create_project_from_url_inner`.
     """
     task_status = CeleryTaskStatus(self)
-    create_project_from_url_inner(
+    return create_project_from_url_inner(
         pdf_url=pdf_url,
         display_title=display_title,
         creator_id=creator_id,
         task_status=task_status,
         app_environment=app_environment,
+    )
+
+
+def create_projects_from_urls_inner(
+    *,
+    pdf_urls: list[str],
+    display_titles: list[str] | None = None,
+    app_environment: str,
+    creator_id: int,
+    task_status: TaskStatus,
+    engine=None,
+):
+    """Create multiple projects from a list of PDF URLs.
+
+    Processes each URL serially: download one, process, cleanup, then next.
+    Continues processing remaining URLs if one fails.
+
+    :param pdf_urls: list of URLs pointing to PDF files.
+    :param display_titles: list of titles for each URL, same length as pdf_urls.
+    :param app_environment: the app environment, e.g. ``"development"``.
+    :param creator_id: the user that created these projects.
+    :param task_status: tracks progress on the task.
+    :param engine: optional SQLAlchemy engine for tests.
+    """
+    total = len(pdf_urls)
+    completed_projects = []
+    task_status.progress(
+        0, total, multi_upload=True, completed_projects=completed_projects
+    )
+
+    for i, pdf_url in enumerate(pdf_urls):
+        if display_titles and i < len(display_titles):
+            display_title = display_titles[i]
+        else:
+            url_path = pdf_url.rstrip("/").split("?")[0]
+            filename = url_path.split("/")[-1]
+            display_title = Path(filename).stem if filename else f"project-{i + 1}"
+
+        logging.info(
+            f"Processing URL {i + 1}/{total}: {pdf_url} (title: {display_title})"
+        )
+
+        try:
+            # Use LocalTaskStatus for inner calls so they don't overwrite
+            # the outer Celery task's state (e.g. setting SUCCESS prematurely
+            # after the first PDF).
+            create_project_from_url_inner(
+                pdf_url=pdf_url,
+                display_title=display_title,
+                app_environment=app_environment,
+                creator_id=creator_id,
+                task_status=LocalTaskStatus(),
+                engine=engine,
+            )
+            slug = slugify(display_title)
+            completed_projects.append(
+                {
+                    "title": display_title,
+                    "slug": slug,
+                    "status": "success",
+                    "error": None,
+                }
+            )
+            logging.info(f"Successfully created project: {display_title}")
+        except Exception as e:
+            error_detail = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
+            logging.error(
+                f"Failed to create project from {pdf_url}: {error_detail}",
+                exc_info=True,
+            )
+            completed_projects.append(
+                {
+                    "title": display_title,
+                    "slug": None,
+                    "status": "failed",
+                    "error": error_detail,
+                }
+            )
+
+        task_status.progress(
+            i + 1,
+            total,
+            multi_upload=True,
+            completed_projects=completed_projects,
+            current_url=pdf_url,
+        )
+
+    success_msg = f"Created {len([p for p in completed_projects if p['status'] == 'success'])} projects from {total} URLs"
+    logging.info(success_msg)
+    return task_status.success(
+        len([p for p in completed_projects if p["status"] == "success"]),
+        slug=None,
+        multi_upload=True,
+        completed_projects=completed_projects,
+    )
+
+
+@app.task(bind=True, time_limit=7200)
+def create_projects_from_urls(
+    self,
+    *,
+    pdf_urls: list[str],
+    display_titles: list[str] | None = None,
+    creator_id: int,
+    app_environment: str,
+):
+    """Create multiple projects from a list of PDF URLs.
+
+    For argument details, see `create_projects_from_urls_inner`.
+    """
+    task_status = CeleryTaskStatus(self)
+    return create_projects_from_urls_inner(
+        pdf_urls=pdf_urls,
+        display_titles=display_titles,
+        app_environment=app_environment,
+        creator_id=creator_id,
+        task_status=task_status,
     )
 
 
@@ -459,7 +598,7 @@ def create_projects_from_gdrive_folder_inner(
                     display_title=title,
                     app_environment=app_environment,
                     creator_id=creator_id,
-                    task_status=TaskStatus(),
+                    task_status=LocalTaskStatus(),
                     engine=engine,
                 )
                 created_projects.append(title)
@@ -476,7 +615,7 @@ def create_projects_from_gdrive_folder_inner(
             f"Created {len(created_projects)} projects from {len(pdf_files)} PDFs"
         )
         logging.info(success_msg)
-        task_status.success(len(created_projects), success_msg)
+        return task_status.success(len(created_projects), success_msg)
 
 
 @app.task(bind=True)
@@ -493,7 +632,7 @@ def create_projects_from_gdrive_folder(
     For argument details, see `create_projects_from_gdrive_folder_inner`.
     """
     task_status = CeleryTaskStatus(self)
-    create_projects_from_gdrive_folder_inner(
+    return create_projects_from_gdrive_folder_inner(
         folder_url=folder_url,
         upload_folder=upload_folder,
         app_environment=app_environment,
@@ -677,7 +816,7 @@ def regenerate_project_pages_inner(
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
-    task_status.success(len(pages), project_slug)
+    return task_status.success(len(pages), project_slug)
 
 
 @app.task(bind=True)
@@ -692,7 +831,7 @@ def regenerate_project_pages(
     For argument details, see `regenerate_project_pages_inner`.
     """
     task_status = CeleryTaskStatus(self)
-    regenerate_project_pages_inner(
+    return regenerate_project_pages_inner(
         project_slug=project_slug,
         app_environment=app_environment,
         task_status=task_status,
@@ -862,7 +1001,7 @@ def replace_project_pdf_inner(
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
-    task_status.success(new_count, project_slug)
+    return task_status.success(new_count, project_slug)
 
 
 @app.task(bind=True, time_limit=1200)
@@ -871,7 +1010,7 @@ def replace_project_pdf(
 ):
     """Celery wrapper for `replace_project_pdf_inner`."""
     task_status = CeleryTaskStatus(self)
-    replace_project_pdf_inner(
+    return replace_project_pdf_inner(
         project_slug=project_slug,
         pdf_path=pdf_path,
         app_environment=app_environment,
@@ -892,7 +1031,7 @@ def replace_project_pdf_from_url_inner(
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
 
-        replace_project_pdf_inner(
+        result = replace_project_pdf_inner(
             project_slug=project_slug,
             pdf_path=str(temp_pdf_path),
             app_environment=app_environment,
@@ -903,13 +1042,14 @@ def replace_project_pdf_from_url_inner(
     finally:
         if temp_pdf_path.exists():
             temp_pdf_path.unlink()
+    return result
 
 
 @app.task(bind=True, time_limit=1200)
 def replace_project_pdf_from_url(self, *, project_slug, pdf_url, app_environment):
     """Celery wrapper for `replace_project_pdf_from_url_inner`."""
     task_status = CeleryTaskStatus(self)
-    replace_project_pdf_from_url_inner(
+    return replace_project_pdf_from_url_inner(
         project_slug=project_slug,
         pdf_url=pdf_url,
         app_environment=app_environment,

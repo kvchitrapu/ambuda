@@ -325,6 +325,54 @@ test('titleToSlug: consecutive hyphens collapsed', () => {
   expect(titleToSlug('foo   bar')).toBe('foo-bar');
 });
 
+test('titleToSlug: G (ṅ) → n', () => {
+  withSanscript({ 'अङ्गम्': 'aGgam' }, () => {
+    expect(titleToSlug('अङ्गम्')).toBe('angam');
+  });
+});
+
+test('titleToSlug: J (ñ) → n', () => {
+  withSanscript({ 'पञ्चतन्त्रम्': 'paJcatantram' }, () => {
+    expect(titleToSlug('पञ्चतन्त्रम्')).toBe('pancatantram');
+  });
+});
+
+test('titleToSlug: M → m before labial (p)', () => {
+  withSanscript({ 'सम्पदा': 'saMpadA' }, () => {
+    expect(titleToSlug('सम्पदा')).toBe('sampada');
+  });
+});
+
+test('titleToSlug: M → m before labial (b)', () => {
+  withSanscript({ 'सम्बन्धः': 'saMbandhaH' }, () => {
+    expect(titleToSlug('सम्बन्धः')).toBe('sambandhah');
+  });
+});
+
+test('titleToSlug: M → m before sibilant (z/ś)', () => {
+  withSanscript({ 'संशय': 'saMzaya' }, () => {
+    expect(titleToSlug('संशय')).toBe('samshaya');
+  });
+});
+
+test('titleToSlug: M → m before S (ṣ)', () => {
+  withSanscript({ 'संस्कृतम्': 'saMskRtam' }, () => {
+    expect(titleToSlug('संस्कृतम्')).toBe('samskrtam');
+  });
+});
+
+test('titleToSlug: M → n before non-labial/sibilant', () => {
+  withSanscript({ 'संगीतम्': 'saMgItam' }, () => {
+    expect(titleToSlug('संगीतम्')).toBe('sangitam');
+  });
+});
+
+test('titleToSlug: M → m before h', () => {
+  withSanscript({ 'सिंहः': 'siMhaH' }, () => {
+    expect(titleToSlug('सिंहः')).toBe('simhah');
+  });
+});
+
 // -- isDuplicateSlug tests --
 
 test('isDuplicateSlug: no duplicate returns false', () => {

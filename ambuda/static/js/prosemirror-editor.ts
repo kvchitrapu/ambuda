@@ -11,6 +11,7 @@ import { keymap } from 'prosemirror-keymap';
 import { history, undo as pmUndo, redo as pmRedo } from 'prosemirror-history';
 import { baseKeymap } from 'prosemirror-commands';
 import { INLINE_MARKS, getAllMarkNames, type MarkName } from './marks-config.ts';
+import routes from './routes';
 
 // Keep in sync with ambuda/utils/structuring.py::BlockType
 const BLOCK_TYPES = [
@@ -465,6 +466,14 @@ class BlockView {
 
   editor: any; // ProofingEditor instance
 
+  meterIndicator: HTMLSpanElement;
+
+  meterReport: HTMLDivElement;
+
+  private _lastMeterText: string;
+
+  private _meterDebounceTimer: ReturnType<typeof setTimeout> | null;
+
   private createLabeledInput(attrName: string, labelText: string, placeholder: string, width: string, extraClass: string = ''): { label: HTMLSpanElement; input: HTMLInputElement } {
     const label = document.createElement('span');
     label.className = 'text-slate-400 text-[11px] ml-1';
@@ -565,6 +574,25 @@ class BlockView {
     this.mergeLabel.appendChild(mergeText);
     this.controlsDOM.appendChild(this.mergeLabel);
 
+    // Meter indicator
+    this._lastMeterText = '';
+    this._meterDebounceTimer = null;
+
+    this.meterIndicator = document.createElement('span');
+    this.meterIndicator.className = 'cursor-pointer select-none ml-1';
+    this.meterIndicator.style.display = 'none';
+    this.meterIndicator.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (this.meterReport.innerHTML) {
+        this.meterReport.style.display = this.meterReport.style.display === 'none' ? 'block' : 'none';
+      }
+    });
+    this.controlsDOM.appendChild(this.meterIndicator);
+
+    this.meterReport = document.createElement('div');
+    this.meterReport.className = 'text-xs px-2 py-1 bg-slate-50 border border-slate-200 rounded mb-1';
+    this.meterReport.style.display = 'none';
+
     // Dropdown
     this.dropdownWrapper = document.createElement('div');
     this.dropdownWrapper.className = 'ml-auto relative';
@@ -601,6 +629,7 @@ class BlockView {
     });
 
     this.dom.appendChild(this.controlsDOM);
+    this.dom.appendChild(this.meterReport);
 
     // Content area
     this.contentDOM = document.createElement('div');
@@ -608,6 +637,13 @@ class BlockView {
     this.contentDOM.style.fontSize = `${this.editor.textZoom}rem`;
     this.contentDOM.contentEditable = 'true';
     this.dom.appendChild(this.contentDOM);
+
+    // For verse blocks, record the initial text so update() doesn't
+    // re-trigger on the same content. The actual initial check is done
+    // as a batch by the editor after all BlockViews are constructed.
+    if ((node.attrs.type || 'p') === 'verse') {
+      this._lastMeterText = node.textContent;
+    }
   }
 
   setBlockDOMClasses() {
@@ -638,7 +674,7 @@ class BlockView {
 
   updateContentDOMClasses() {
     const blockType = this.node.attrs.type || 'p';
-    this.contentDOM.className = 'pm-content-dom';
+    this.contentDOM.className = 'pm-content-dom deva-serif';
     if (blockType === 'ignore') {
       this.contentDOM.classList.add('bg-gray-100', 'text-gray-500');
     } else if (blockType === 'metadata') {
@@ -692,18 +728,39 @@ class BlockView {
 
     this.updateFieldVisibility();
 
+    // Meter check for verse blocks
+    if (blockType === 'verse') {
+      const currentText = node.textContent;
+      if (currentText !== this._lastMeterText) {
+        this.scheduleMeterCheck(currentText);
+      }
+    } else {
+      this.meterIndicator.style.display = 'none';
+      this.meterReport.style.display = 'none';
+      if (this._meterDebounceTimer) {
+        clearTimeout(this._meterDebounceTimer);
+        this._meterDebounceTimer = null;
+      }
+      this._lastMeterText = '';
+    }
+
     return true;
   }
 
   stopEvent(event: Event) {
     // Allow all events within the contentDOM (for editing)
-    // but prevent events in the controls from affecting ProseMirror
-    return this.controlsDOM.contains(event.target as Node);
+    // but prevent events in the controls and meter report from affecting ProseMirror
+    const target = event.target as Node;
+    return this.controlsDOM.contains(target) || this.meterReport.contains(target);
   }
 
   ignoreMutation(mutation: MutationRecord) {
-    // Ignore mutations in controls
-    if (mutation.type === 'attributes' && mutation.target !== this.contentDOM) {
+    // Ignore all mutations outside contentDOM (controls bar, meter report, etc.)
+    const target = mutation.target as Node;
+    if (this.controlsDOM.contains(target) || this.meterReport.contains(target)) {
+      return true;
+    }
+    if (mutation.type === 'attributes' && target !== this.contentDOM) {
       return true;
     }
     return false;
@@ -796,7 +853,82 @@ class BlockView {
     this.editor.mergeBlockDown(this.getBlockIndex());
   }
 
+  applyMeterResult(data: { ok: boolean; meter?: string; scan?: Array<Array<{ text: string; weight: string; odd: boolean }>> }) {
+    this.meterIndicator.style.display = '';
+    this.meterIndicator.classList.remove('pm-meter-pass', 'pm-meter-fail');
+    if (data.ok) {
+      this.meterIndicator.textContent = `\u2713 meter: ${data.meter}`;
+      this.meterIndicator.classList.add('pm-meter-pass');
+      this.meterReport.innerHTML = '';
+      this.meterReport.style.display = 'none';
+    } else {
+      this.meterIndicator.textContent = '\u2717 meter unknown';
+      this.meterIndicator.classList.add('pm-meter-fail');
+      this.meterReport.innerHTML = this.renderScanReport(data.scan || []);
+      this.meterReport.style.display = 'none';
+    }
+  }
+
+  private scheduleMeterCheck(text: string) {
+    if (this._meterDebounceTimer) {
+      clearTimeout(this._meterDebounceTimer);
+    }
+    this._lastMeterText = text;
+    this._meterDebounceTimer = setTimeout(() => {
+      this.runMeterCheck(text);
+    }, 800);
+  }
+
+  private async runMeterCheck(text: string) {
+    if (!text.trim()) {
+      this.meterIndicator.style.display = 'none';
+      this.meterReport.style.display = 'none';
+      return;
+    }
+
+    try {
+      const resp = await fetch(routes.proofingMeterCheck(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ verses: [text] }),
+      });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data.results && data.results.length > 0) {
+        this.applyMeterResult(data.results[0]);
+      }
+    } catch (err) {
+      console.error('[MeterCheck] Fetch error:', err);
+      this.meterIndicator.style.display = 'none';
+    }
+  }
+
+  private escapeHTML(str: string): string {
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+  }
+
+  private renderScanReport(scan: Array<Array<{ text: string; weight: string; odd: boolean }>>): string {
+    if (!scan.length) return '<span style="color:#dc2626">No metrical data</span>';
+    const maxCols = Math.max(...scan.map((line) => line.length));
+    const rows = scan.map((line) => {
+      const cells = line.map((s) => {
+        const bg = s.odd ? 'background:#fecaca;' : '';
+        return `<td style="text-align:center;padding:1px 3px;${bg}"><div>${this.escapeHTML(s.text)}</div><div style="font-size:9px;color:#64748b">${s.weight}</div></td>`;
+      }).join('');
+      // Pad short rows so columns stay aligned
+      const pad = maxCols - line.length;
+      const padCells = pad > 0 ? `<td colspan="${pad}"></td>` : '';
+      return `<tr>${cells}${padCells}</tr>`;
+    }).join('');
+    return `<table style="border-collapse:collapse">${rows}</table>`;
+  }
+
   destroy() {
+    if (this._meterDebounceTimer) {
+      clearTimeout(this._meterDebounceTimer);
+    }
     // Unregister this BlockView from the editor
     if (this.editor.blockViews) {
       this.editor.blockViews.delete(this);
@@ -1216,6 +1348,37 @@ export default class {
         }
       },
     });
+
+    // Batch meter check for all verse blocks on initial load
+    this.runBatchMeterCheck();
+  }
+
+  private async runBatchMeterCheck() {
+    const verseViews: BlockView[] = [];
+    const verses: string[] = [];
+    this.blockViews.forEach((bv) => {
+      if ((bv.node.attrs.type || 'p') === 'verse' && bv.node.textContent.trim()) {
+        verseViews.push(bv);
+        verses.push(bv.node.textContent);
+      }
+    });
+    if (!verses.length) return;
+
+    try {
+      const resp = await fetch(routes.proofingMeterCheck(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ verses }),
+      });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const results = data.results || [];
+      for (let i = 0; i < verseViews.length && i < results.length; i += 1) {
+        verseViews[i].applyMeterResult(results[i]);
+      }
+    } catch (err) {
+      console.error('[MeterCheck] Batch fetch error:', err);
+    }
   }
 
   getText(): string {

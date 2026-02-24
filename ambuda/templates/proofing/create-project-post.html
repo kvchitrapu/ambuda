@@ -1,19 +1,15 @@
 {% extends 'proofing/base.html' %}
 {% import "macros/components.html" as components %}
-{% import "macros/celery.html" as m_cel %}
 {% import "macros/proofing.html" as m %}
-{% import "macros/talk.html" as m_talk %}
-{% import "macros/forms.html" as mf %}
 
 
-{% block title %}Create a new project | Ambuda{% endblock %}
+{% block title %}Upload status | Ambuda{% endblock %}
 
 
 {% block content %}
 <div class="prose">
-<h1>Create new project</h1>
+<h1>Upload status</h1>
 
-{% if percent < 100 %}
 <p>{% trans %}
 We are currently creating your project. If you accidentally close this page,
 don't worry: your project will still be created.
@@ -23,17 +19,20 @@ don't worry: your project will still be created.
 You can track your project's progress with the progress bar below. This
 progress bar updates every 5 seconds.
 {% endtrans %}</p>
-{% endif %}
+
+<p class="text-sm text-slate-500">Task ID:
+  <code class="text-xs">{{ task_id }}</code>
+</p>
 
 {% set url = url_for('proofing.create_project_status', task_id=task_id) %}
 <div x-data="htmlPoller('{{ url }}')">
-  {% with current=current, total=total, percent=percent, slug=slug, status=status %}
-    {% include 'include/task-progress.html' %}
-  {% endwith %}
+  {# Initial state: show a pending progress bar. The poller will replace
+     this div's content with the real status every 5 seconds. #}
+  <div class="my-4 rounded w-full bg-slate-100 h-4">
+    <div class="rounded bg-green-300 h-4" style="width: 0%">&nbsp;</div>
+  </div>
+  <p>Beginning upload &hellip;</p>
 </div>
 </div>
-
-<script type="text/javascript">
-</script>
 
 {% endblock %}

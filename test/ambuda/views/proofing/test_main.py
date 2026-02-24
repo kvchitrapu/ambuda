@@ -68,6 +68,7 @@ def test_create_project__oversized_pdf(rama_client):
             data={
                 "pdf_source": "local",
                 "local_file": (fake_pdf, "big.pdf"),
+                "display_title": "Test Project",
             },
             content_type="multipart/form-data",
         )

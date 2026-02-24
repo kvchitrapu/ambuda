@@ -27,13 +27,26 @@
 
 
 <form action="" method="POST" enctype="multipart/form-data"
-  x-data="{ source: '{{ form.pdf_source.data }}'}">
+  x-data="{
+    source: '{{ form.pdf_source.data }}',
+    titleExists: false,
+    checkTitleUrl: '{{ url_for("proofing.check_title") }}',
+    checkTitle(value) {
+      const v = value.trim();
+      if (!v) { this.titleExists = false; return; }
+      fetch(this.checkTitleUrl + '?title=' + encodeURIComponent(v))
+        .then(r => r.json())
+        .then(d => { this.titleExists = d.exists; });
+    }
+  }">
 {{ form.csrf_token }}
 
 {% set radios = form.pdf_source|list %}
-<fieldset x-ref="source" class="p-4 my-8 bg-slate-100">
+<fieldset class="p-4 my-8 bg-slate-100 rounded">
+  <legend class="font-semibold mb-2">Step 1: Choose a source</legend>
+
   {{ _radio2(radios[0], "source") }}
-  <div class="ml-6 my-4" x-show="source === 'url'">
+  <div class="ml-6 my-4" x-show="source === 'url'" x-cloak>
     <p>We'll fetch a PDF from the given URL. Please provide the full URL to
     the PDF file (e.g., from archive.org, Google Drive, Dropbox, or any other
     publicly accessible URL).</p>
@@ -44,18 +57,28 @@
   </div>
 
   {{ _radio2(radios[1], "source") }}
-  <div class="ml-6 my-4" x-show="source === 'local'">
+  <div class="ml-6 my-4" x-show="source === 'local'" x-cloak>
     <p>We'll copy the PDF from your computer. Please use the form below to find
     a PDF on your computer:</p>
 
-    <div class="my-4 bg-slate-100">
+    <div class="my-4">
       {{ form.local_file }}
     </div>
   </div>
 
-  {#
   {{ _radio2(radios[2], "source") }}
-  <div class="ml-6 my-4" x-show="source === 'gdrive'">
+  <div class="ml-6 my-4" x-show="source === 'multi_url'" x-cloak>
+    <p>We'll fetch PDFs from the given URLs and create one project for each.
+    Enter one entry per line in the format <code>Title | URL</code>.</p>
+
+    <div class="my-4">
+      {{ form.pdf_urls(class_="rounded border p-2 w-full font-mono text-sm", rows="6", placeholder="My First Book | https://archive.org/download/book1/book1.pdf\nMy Second Book | https://archive.org/download/book2/book2.pdf") }}
+    </div>
+  </div>
+
+  {#
+  {{ _radio2(radios[3], "source") }}
+  <div class="ml-6 my-4" x-show="source === 'gdrive'" x-cloak>
     <p>We'll fetch all PDFs from a public Google Drive folder and create one
     project for each PDF. The folder must be publicly accessible without login.
     Please provide the folder URL:</p>
@@ -78,9 +101,22 @@
 
 </fieldset>
 
-<div class="my-4">
-  {{ form.display_title.label(class_="block mb-2") }}
-  {{ form.display_title(class_="rounded border p-2 w-full", placeholder="Leave blank to auto-generate from file hash") }}
+<div class="my-8" x-show="source !== 'multi_url'" x-cloak>
+  <fieldset class="p-4 bg-slate-100 rounded">
+    <legend class="font-semibold mb-2">Step 2: Name your project</legend>
+
+    <label for="{{ form.display_title.id }}" class="block mb-1">Project title</label>
+    {{ form.display_title(class_="rounded border p-2 w-full",
+        placeholder="Enter a title for your project",
+        **{"x-bind:required": "source !== 'multi_url'",
+           "x-on:blur": "checkTitle($el.value)"}) }}
+
+    <div x-show="titleExists" x-cloak
+         class="mt-2 p-3 bg-yellow-50 border border-yellow-300 rounded text-sm text-yellow-800">
+      A project with a similar title already exists. You can still create this
+      project &mdash; the system will generate a unique identifier.
+    </div>
+  </fieldset>
 </div>
 
 <input class="block btn btn-submit" type="submit" value="{{ _('Create project') }}">
