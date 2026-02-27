@@ -82,6 +82,15 @@ const nodes: Record<string, NodeSpec> = {
       return [node.attrs.type || 'p', attrs, 0];
     },
   },
+  break_separator: {
+    inline: true,
+    group: 'inline',
+    atom: true,
+    parseDOM: [{ tag: 'break' }, { tag: 'span.pm-break-marker' }],
+    toDOM() {
+      return ['span', { class: 'pm-break-marker', contenteditable: 'false' }, '¶'];
+    },
+  },
   text: {
     group: 'inline',
   },
@@ -1001,6 +1010,12 @@ function parseInlineContent(elem: Element, schema: Schema): PMNode[] {
       const el = node as Element;
       const tagName = el.tagName.toLowerCase();
 
+      // <break> is a void inline node, not a mark
+      if (tagName === 'break') {
+        result.push(schema.nodes.break_separator.create());
+        return;
+      }
+
       // Check if it's a mark we want to render visually
       const validMarkNames = getAllMarkNames();
       if (validMarkNames.includes(tagName)) {
@@ -1092,7 +1107,9 @@ function serializeInlineContent(node: PMNode): string {
   let result = '';
 
   node.forEach((child) => {
-    if (child.isText) {
+    if (child.type.name === 'break_separator') {
+      result += '<break/>';
+    } else if (child.isText) {
       let text = escapeXML(child.text || '');
       child.marks.forEach((mark) => {
         text = `<${mark.type.name}>${text}</${mark.type.name}>`;

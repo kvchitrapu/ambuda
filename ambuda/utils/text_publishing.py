@@ -357,6 +357,35 @@ def find_uncovered_blocks(project: db.Project) -> list[UncoveredBlock]:
 # - build footnote refs and check them with warnings
 #   - <ref target="#X"> type="noteAnchor">
 #   - <note xml:id="X" type="footnote">...</note>
+def _split_block_at_breaks(xml: etree._Element) -> list[etree._Element]:
+    """Split a block element at <break/> markers, returning sub-blocks.
+
+    If there are no <break/> children, returns a single-element list
+    containing the original element (unmodified).
+    """
+    break_children = [child for child in xml if child.tag == InlineType.BREAK]
+    if not break_children:
+        return [xml]
+
+    sub_blocks: list[etree._Element] = []
+    current = etree.Element(xml.tag, dict(xml.attrib))
+    current.text = xml.text or ""
+
+    for child in list(xml):
+        if child.tag == InlineType.BREAK:
+            sub_blocks.append(current)
+            current = etree.Element(xml.tag, dict(xml.attrib))
+            current.attrib.pop("n", None)
+            current.text = child.tail or ""
+        else:
+            current.append(child)
+            # If there's tail text after the child, it's already on child.tail
+            # and will move with the child — no extra handling needed.
+
+    sub_blocks.append(current)
+    return sub_blocks
+
+
 def _rewrite_block_to_tei_xml(xml: etree._Element, image_number: int):
     """Rewrite a block of proofing XML into TEI XML."""
     # Text reshaping
@@ -721,85 +750,95 @@ def _create_tei_sections_and_blocks(
             or proof_xml.get("merge-text", "false").lower() == "true"
         )
 
-        # Deep copy to avoid mutating page XML
-        tei_xml = copy.deepcopy(proof_xml)
-        _rewrite_block_to_tei_xml(tei_xml, block.image_number)
+        # Deep copy to avoid mutating page XML, then split at <break/> markers.
+        proof_copy = copy.deepcopy(proof_xml)
+        sub_blocks = _split_block_at_breaks(proof_copy)
 
-        # TODO:
-        # <lg> inheriting from previous n <-- should add +1
-        # <sp><lg> <-- should be numbered
-        # merge-next should merge into next of same type
+        for sub_block_idx, sub_block_xml in enumerate(sub_blocks):
+            tei_xml = sub_block_xml
+            _rewrite_block_to_tei_xml(tei_xml, block.image_number)
 
-        # Assign "n" to all blocks so that they have unique names (for translations, etc.)
-        n = proof_xml.attrib.get("n")
-        if tei_xml.tag in {"note"}:
-            # Do nothing -- these elements should never have an "n" assigned.
-            pass
-        elif n and tei_xml.tag != "sp":
-            ns.override(tei_xml.tag, n)
-            # Explicit n is never added to `sp`, so skip.
-            tei_xml.attrib["n"] = n
-        else:
-            n = ns.next(tei_xml.tag)
-            tei_xml.attrib["n"] = n
+            # TODO:
+            # <lg> inheriting from previous n <-- should add +1
+            # <sp><lg> <-- should be numbered
+            # merge-next should merge into next of same type
+
+            # Assign "n" to all blocks so that they have unique names (for translations, etc.)
+            # Only the first sub-block inherits the explicit n from the proof XML.
+            n = proof_xml.attrib.get("n") if sub_block_idx == 0 else None
+            if tei_xml.tag in {"note"}:
+                # Do nothing -- these elements should never have an "n" assigned.
+                pass
+            elif n and tei_xml.tag != "sp":
+                ns.override(tei_xml.tag, n)
+                # Explicit n is never added to `sp`, so skip.
+                tei_xml.attrib["n"] = n
+            else:
+                n = ns.next(tei_xml.tag)
+                tei_xml.attrib["n"] = n
+
+                if tei_xml.tag == "sp":
+                    for child_xml in tei_xml:
+                        if child_xml.tag == InlineType.SPEAKER:
+                            # <speaker> should never be numbered.
+                            continue
+                        if "n" in child_xml.attrib:
+                            # Don't overwrite existing `n`.
+                            continue
+                        n = ns.next(child_xml.tag)
+                        child_xml.attrib["n"] = n
+
+            _has_no_text = not (tei_xml.text or "").strip()
+            _has_one_stage_element = len(tei_xml) == 1 and tei_xml[0].tag == "stage"
+            _stage_has_no_tail = (
+                len(tei_xml) == 1 and not (tei_xml[0].tail or "").strip()
+            )
+            _is_stage_only = (
+                _has_no_text and _has_one_stage_element and _stage_has_no_tail
+            )
+            if _is_stage_only:
+                # TODO: how reliable is this?
+                active_sp = None
+            if tei_xml.tag == "sp":
+                active_sp = None
+
+            # Page number
+            try:
+                # Subtract 1 because image_number is 1-indexed.
+                assert 1 <= block.image_number <= len(page_numbers)
+                print_page_number = page_numbers[block.image_number - 1]
+            except IndexError:
+                print_page_number = DEFAULT_PRINT_PAGE_NUMBER
+
+            if merge_next is not None and (
+                merge_next.tag == tei_xml.tag or merge_next.tag == "sp"
+            ):
+                # Only merge matching types (<p> and <p>, <lg> and <lg>, etc.)
+                # Otherwise we get weird behavior, e.g. merging <lg> with <note>
+                _concatenate_tei_xml_blocks_across_page_boundary(
+                    merge_next, tei_xml, print_page_number
+                )
+                tei_xml = merge_next
+                merge_next = None
+            else:
+                if tei_xml.tag == "note":
+                    mark = proof_xml.attrib.get("mark")
+                    if mark:
+                        note_name = f"{block.image_number}.{mark}"
+                        footnote_map[note_name] = tei_xml
+                elif n:
+                    page_map[n] = block.revision.page_id
+                    if tei_xml.tag in {"p", "lg"} and active_sp is not None:
+                        active_sp.append(tei_xml)
+                    else:
+                        element_map[n] = tei_xml
 
             if tei_xml.tag == "sp":
-                for child_xml in tei_xml:
-                    if child_xml.tag == InlineType.SPEAKER:
-                        # <speaker> should never be numbered.
-                        continue
-                    if "n" in child_xml.attrib:
-                        # Don't overwrite existing `n`.
-                        continue
-                    n = ns.next(child_xml.tag)
-                    child_xml.attrib["n"] = n
+                active_sp = tei_xml
 
-        _has_no_text = not (tei_xml.text or "").strip()
-        _has_one_stage_element = len(tei_xml) == 1 and tei_xml[0].tag == "stage"
-        _stage_has_no_tail = len(tei_xml) == 1 and not (tei_xml[0].tail or "").strip()
-        _is_stage_only = _has_no_text and _has_one_stage_element and _stage_has_no_tail
-        if _is_stage_only:
-            # TODO: how reliable is this?
-            active_sp = None
-        if tei_xml.tag == "sp":
-            active_sp = None
-
-        # Page number
-        try:
-            # Subtract 1 because image_number is 1-indexed.
-            assert 1 <= block.image_number <= len(page_numbers)
-            print_page_number = page_numbers[block.image_number - 1]
-        except IndexError:
-            print_page_number = DEFAULT_PRINT_PAGE_NUMBER
-
-        if merge_next is not None and (
-            merge_next.tag == tei_xml.tag or merge_next.tag == "sp"
-        ):
-            # Only merge matching types (<p> and <p>, <lg> and <lg>, etc.)
-            # Otherwise we get weird behavior, e.g. merging <lg> with <note>
-            _concatenate_tei_xml_blocks_across_page_boundary(
-                merge_next, tei_xml, print_page_number
-            )
-            tei_xml = merge_next
-            merge_next = None
-        else:
-            if tei_xml.tag == "note":
-                mark = proof_xml.attrib.get("mark")
-                if mark:
-                    note_name = f"{block.image_number}.{mark}"
-                    footnote_map[note_name] = tei_xml
-            elif n:
-                page_map[n] = block.revision.page_id
-                if tei_xml.tag in {"p", "lg"} and active_sp is not None:
-                    active_sp.append(tei_xml)
-                else:
-                    element_map[n] = tei_xml
-
-        if tei_xml.tag == "sp":
-            active_sp = tei_xml
-
-        if should_merge_next:
-            merge_next = tei_xml
+            # Only the last sub-block can merge with the next block.
+            if should_merge_next and sub_block_idx == len(sub_blocks) - 1:
+                merge_next = tei_xml
 
     # Insert footnotes where we find matches.
     if footnote_map:

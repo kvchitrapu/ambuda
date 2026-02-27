@@ -203,6 +203,10 @@
     @apply text-xs p-0.5 rounded bg-red-600 text-white rounded;
   }
 
+  .pm-break-marker {
+    @apply text-black bg-gray-200 font-bold px-0.5 rounded;
+  }
+
   /* Prosemirror mark CSS */
   .pm-error, .pm-fix, .pm-flag, .pm-stage, .pm-speaker, .pm-chaya, .pm-prakrit, .pm-note, .pm-add, .pm-ellipsis, .pm-quote {
     @apply border-b-2 pr-1;

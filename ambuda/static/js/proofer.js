@@ -332,6 +332,7 @@ export default () => ({
       { label: 'Edit > Undo', action: () => this.undo() },
       { label: 'Edit > Redo', action: () => this.redo() },
       { label: 'Edit > Insert block', action: () => this.insertBlock() },
+      { label: 'Edit > Insert break', code: 'ib', action: () => this.insertBreak() },
       { label: 'Edit > Delete active block', action: () => this.deleteBlock() },
       { label: 'Edit > Move block up', action: () => this.moveBlockUp() },
       { label: 'Edit > Move block down', action: () => this.moveBlockDown() },
@@ -913,6 +914,13 @@ export default () => ({
 
   insertBlock() {
     Alpine.raw(this.editor).insertBlock();
+  },
+
+  insertBreak() {
+    const editor = Alpine.raw(this.editor);
+    const { state, dispatch } = editor.view;
+    const breakNode = state.schema.nodes.break_separator.create();
+    dispatch(state.tr.replaceSelectionWith(breakNode));
   },
 
   deleteBlock() {

@@ -38,6 +38,7 @@ class InlineType(StrEnum):
     ELLIPSIS = "ellipsis"
     QUOTE = "quote"
     SYNC = "sync"
+    BREAK = "break"
 
 
 class TEITag(StrEnum):
@@ -157,15 +158,15 @@ class Schema:
     assertions: dict[str, list[Assertion]] = dc.field(default_factory=dict)
 
 
-CORE_INLINE_TYPES = set(InlineType)
+CORE_INLINE_TYPES = set(InlineType) - {InlineType.BREAK}
 PROOFING_XML_VALIDATION_SPEC = {
     "page": ValidationSpec(children=set(BlockType), attrib=set()),
     BlockType.PARAGRAPH: ValidationSpec(
-        children=CORE_INLINE_TYPES,
+        children=CORE_INLINE_TYPES | {InlineType.BREAK},
         attrib={"lang", "text", "n", "merge-next", "merge-text"},
     ),
     BlockType.VERSE: ValidationSpec(
-        children=CORE_INLINE_TYPES,
+        children=CORE_INLINE_TYPES | {InlineType.BREAK},
         attrib={"lang", "text", "n", "merge-next", "merge-text"},
     ),
     BlockType.FOOTNOTE: ValidationSpec(
@@ -190,12 +191,13 @@ PROOFING_XML_VALIDATION_SPEC = {
     **{
         tag: ValidationSpec(children=set(InlineType), attrib=set())
         for tag in InlineType
-        if tag != InlineType.SYNC
+        if tag not in (InlineType.SYNC, InlineType.BREAK)
     },
     InlineType.SYNC: ValidationSpec(
         children=set(InlineType),
         attrib={"code"},
     ),
+    InlineType.BREAK: ValidationSpec(children=set(), attrib=set()),
 }
 
 # TODO:
@@ -461,6 +463,19 @@ def _assert_not_empty(
     return [ValidationResult.error(f"<{el.tag}> must not be empty")]
 
 
+def _assert_break_empty(
+    el: ET.Element, ancestors: tuple[ET.Element, ...]
+) -> list[ValidationResult]:
+    """Check that <break> has no text content or children."""
+    if len(el) > 0 or (el.text and el.text.strip()):
+        return [
+            ValidationResult.error(
+                "<break> must be a void element (no text or children)"
+            )
+        ]
+    return []
+
+
 def _assert_seg_rend(
     el: ET.Element, ancestors: tuple[ET.Element, ...]
 ) -> list[ValidationResult]:
@@ -483,6 +498,7 @@ PROOFING_XML_SCHEMA = Schema(
     specs=PROOFING_XML_VALIDATION_SPEC,
     assertions={
         BlockType.METADATA: [_assert_metadata_block],
+        InlineType.BREAK: [_assert_break_empty],
     },
 )
 

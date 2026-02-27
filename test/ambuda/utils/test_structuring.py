@@ -46,6 +46,13 @@ B = s.ProofBlock
                 "quote",
             ]
         ],
+        # OK: <break/> in p and verse
+        ("<page><p>text<break/>more</p></page>", []),
+        ("<page><verse>text<break/>more</verse></page>", []),
+        # ERR: <break> in heading (not allowed)
+        ("<page><heading>text<break/>more</heading></page>", ["Unexpected.*break"]),
+        # ERR: <break> with content (must be empty)
+        ("<page><p><break>content</break></p></page>", ["void element"]),
         # ERR: unknown or unexpected tag
         ("<foo></foo>", ["must be 'page'"]),
         ("<page><unk>foo</unk></page>", ["Unexpected.*unk", "Unknown.*unk"]),

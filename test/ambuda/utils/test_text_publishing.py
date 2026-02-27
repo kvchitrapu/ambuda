@@ -334,6 +334,99 @@ def test_rewrite_block_to_tei_xml__chaya(input, expected):
     assert expected == actual
 
 
+# Block splitting at <break/>
+# -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "input,expected",
+    [
+        # No break -> single element, unchanged
+        ("<p>foo</p>", ["<p>foo</p>"]),
+        # Single break in <p> -> two <p> elements
+        ("<p>foo<break/>bar</p>", ["<p>foo</p>", "<p>bar</p>"]),
+        # Single break in <verse> -> two <verse> elements
+        ("<verse>foo<break/>bar</verse>", ["<verse>foo</verse>", "<verse>bar</verse>"]),
+        # Multiple breaks -> N+1 elements
+        (
+            "<p>a<break/>b<break/>c</p>",
+            ["<p>a</p>", "<p>b</p>", "<p>c</p>"],
+        ),
+        # Break with inline marks preserved on correct side
+        (
+            "<p>foo<fix>bar</fix><break/>biz</p>",
+            ["<p>foo<fix>bar</fix></p>", "<p>biz</p>"],
+        ),
+        # Break with inline marks after break
+        (
+            "<p>foo<break/><fix>bar</fix>biz</p>",
+            ["<p>foo</p>", "<p><fix>bar</fix>biz</p>"],
+        ),
+        # Attributes (except n) are copied to sub-blocks
+        (
+            '<p n="1" lang="sa">foo<break/>bar</p>',
+            ['<p n="1" lang="sa">foo</p>', '<p lang="sa">bar</p>'],
+        ),
+    ],
+)
+def test_split_block_at_breaks(input, expected):
+    xml = etree.fromstring(input)
+    result = s._split_block_at_breaks(xml)
+    actual = [s._to_string(el) for el in result]
+    assert actual == expected
+
+
+# Publishing with <break/>
+# -------------------------------------------------------------------
+
+
+def test_create_tei_document__break_in_paragraph():
+    _test_create_tei_document(
+        ["<page><p>foo<break/>bar</p></page>"],
+        [
+            s.TEIBlock(xml='<p n="p1">foo</p>', slug="p1", page_id=0),
+            s.TEIBlock(xml='<p n="p2">bar</p>', slug="p2", page_id=0),
+        ],
+    )
+
+
+def test_create_tei_document__break_in_verse():
+    _test_create_tei_document(
+        ["<page><verse>line1\nline2<break/>line3\nline4</verse></page>"],
+        [
+            s.TEIBlock(
+                xml='<lg n="lg1"><l>line1</l><l>line2</l></lg>',
+                slug="lg1",
+                page_id=0,
+            ),
+            s.TEIBlock(
+                xml='<lg n="lg2"><l>line3</l><l>line4</l></lg>',
+                slug="lg2",
+                page_id=0,
+            ),
+        ],
+    )
+
+
+def test_create_tei_document__multiple_breaks():
+    _test_create_tei_document(
+        ["<page><p>a<break/>b<break/>c</p></page>"],
+        [
+            s.TEIBlock(xml='<p n="p1">a</p>', slug="p1", page_id=0),
+            s.TEIBlock(xml='<p n="p2">b</p>', slug="p2", page_id=0),
+            s.TEIBlock(xml='<p n="p3">c</p>', slug="p3", page_id=0),
+        ],
+    )
+
+
+def test_create_tei_document__no_break_backward_compatible():
+    """Blocks without <break/> should produce identical output to before."""
+    _test_create_tei_document(
+        ["<page><p>foo</p></page>"],
+        [s.TEIBlock(xml='<p n="p1">foo</p>', slug="p1", page_id=0)],
+    )
+
+
 # Doc-level rewriting
 # -------------------------------------------------------------------
 
