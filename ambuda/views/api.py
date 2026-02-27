@@ -155,6 +155,47 @@ def auto_structure_api():
         return jsonify({"error": "Auto-structuring failed"}), 500
 
 
+def _check_well_formed_text(text: str) -> dict:
+    """Check a single block's text for well-formedness. Returns a result dict."""
+    import re
+
+    from ambuda.utils.text_validation import WellFormedText
+
+    errors = []
+    m = re.search(WellFormedText.RE_ILLEGAL, text)
+    if m:
+        errors.append(f"unexpected '{m.group(1)}'")
+    for seq in WellFormedText.FORBIDDEN_SEQUENCES:
+        if seq in text:
+            errors.append(f"forbidden '{seq}'")
+
+    return {"ok": len(errors) == 0, "errors": errors}
+
+
+def _check_one_block(text: str, block_type: str, chandas, checker) -> dict:
+    """Run all applicable checks on a single block. Returns a unified result."""
+    text = text.strip()
+    checks: dict = {}
+    error_count = 0
+
+    # Well-formed text check (skip for ignore/metadata)
+    if block_type not in ("ignore", "metadata"):
+        wft = _check_well_formed_text(text)
+        checks["well_formed_text"] = wft
+        if not wft["ok"]:
+            error_count += len(wft["errors"])
+
+    # Meter check (only for verse blocks)
+    if block_type == "verse" and text and chandas is not None:
+        meter_result = _check_one_verse(text, chandas, checker)
+        checks["meter"] = meter_result
+        if not meter_result["ok"]:
+            error_count += 1
+
+    ok = error_count == 0
+    return {"ok": ok, "error_count": error_count, "checks": checks}
+
+
 def _check_one_verse(text: str, chandas, checker) -> dict:
     """Check meter for a single verse. Returns a result dict."""
     from vidyut.lipi import Scheme, transliterate
@@ -219,6 +260,36 @@ def meter_check_api():
     chandas = _get_chandas()
     checker = MeterCheck()
     results = [_check_one_verse(v, chandas, checker) for v in verses]
+    return jsonify({"results": results})
+
+
+@bp.route("/proofing/block-check", methods=["POST"])
+@login_required
+def block_check_api():
+    """Check a batch of blocks for text well-formedness and meter.
+
+    Accepts {"blocks": [{"text": "...", "type": "verse"}, ...]}.
+    Returns {"results": [{"ok": true, "error_count": 0, "checks": {...}}, ...]}.
+    """
+    from ambuda.utils.text_validation import MeterCheck, _get_chandas
+
+    data = request.get_json()
+    if not data or "blocks" not in data:
+        return jsonify({"error": "Missing 'blocks' field"}), 400
+
+    blocks = data["blocks"]
+    if not isinstance(blocks, list):
+        return jsonify({"error": "'blocks' must be an array"}), 400
+
+    # Only init chandas if at least one verse block is present
+    has_verse = any(b.get("type") == "verse" for b in blocks)
+    chandas = _get_chandas() if has_verse else None
+    checker = MeterCheck() if has_verse else None
+
+    results = [
+        _check_one_block(b.get("text", ""), b.get("type", "p"), chandas, checker)
+        for b in blocks
+    ]
     return jsonify({"results": results})
 
 

@@ -143,7 +143,10 @@ export default () => ({
       author: createPicker('author', this, {
         getItems: (c) => c.authors,
         displayValue: (c, entry) => entry.author || '',
-        match: (name, query) => name.toLowerCase().includes(query),
+        match: (name, query) => {
+          const lower = name.toLowerCase();
+          return lower.includes(query) || toHK(name).toLowerCase().startsWith(query);
+        },
         onSelect: (entry, name) => { entry.author = name; },
       }),
       genre: createPicker('genre', this, {
@@ -329,6 +332,15 @@ export default () => ({
     const newEntry = { expanded: true };
     this.fields.forEach((f) => { newEntry[f.name] = this.getDefaultValue(f); });
     this.config.publish.push(newEntry);
+  },
+
+  clonePublishEntry(index) {
+    const source = this.config.publish[index];
+    const clone = { ...JSON.parse(JSON.stringify(source)), _expanded: true };
+    clone.title = '';
+    clone.slug = '';
+    clone.target = '';
+    this.config.publish.splice(index + 1, 0, clone);
   },
 
   removePublishEntry(index) {

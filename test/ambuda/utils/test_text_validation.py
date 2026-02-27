@@ -101,6 +101,19 @@ def test_validate_all_sanskrit_text_is_well_formed():
     assert len(validation_result.errors) == 1
 
 
+def test_well_formed_text_rejects_forbidden_sequences():
+    # क्लृ is a common OCR artifact that should be rejected
+    xml = _get_xml_from_string('<doc><div><lg n="lg1"><l>क्लृप्तम्</l></lg></div></doc>')
+    validation_result = text_validation.WellFormedText.validate_doc(xml)
+    assert len(validation_result.errors) == 1
+    assert "क्लृ" in validation_result.errors[0]["messages"][0]
+
+    # Without the forbidden sequence, text should pass
+    xml = _get_xml_from_string('<doc><div><lg n="lg1"><l>कृतम्</l></lg></div></doc>')
+    validation_result = text_validation.WellFormedText.validate_doc(xml)
+    assert len(validation_result.errors) == 0
+
+
 def test_validate_verse_number_if_exists():
     # Happy path: n="1.1", last verse number is १-१, rpartition(".") gives "1"
     xml = _get_xml_from_string(

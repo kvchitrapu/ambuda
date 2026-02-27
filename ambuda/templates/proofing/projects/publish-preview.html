@@ -20,7 +20,7 @@
 {{ components.flash_messages() }}
 
 {{ m.project_header_nested('Publish Preview', project) }}
-{{ m.project_tabs(project=project, active='publish', is_mod=current_user.is_moderator) }}
+{{ m.project_tabs(project=project, active='publish', is_mod=current_user.is_moderator, is_p2=current_user.is_p2) }}
 
 <div class="not-prose max-w-none">
   <div class="mb-4">

@@ -189,10 +189,10 @@
   .pm-content-dom {
     @apply w-full p-2 border border-slate-200 bg-white rounded font-normal min-h-[3rem] focus:outline-none focus:ring-2 focus:ring-blue-400 whitespace-pre-wrap;
   }
-  .pm-meter-pass {
+  .pm-check-pass {
     @apply text-[11px] font-medium rounded-full px-2 py-0.5 leading-tight text-green-800 bg-green-100 border border-green-200;
   }
-  .pm-meter-fail {
+  .pm-check-fail {
     @apply text-[11px] font-medium rounded-full px-2 py-0.5 leading-tight text-red-800 bg-red-50 border border-red-200;
   }
   .pm-html-tag {
@@ -248,7 +248,7 @@
   }
 
   .pm-ref:before {
-    content: "ref: ";
+    content: "🦶: ";
     @apply text-xs pl-1;
   }
 

@@ -14,7 +14,7 @@ import { INLINE_MARKS, getAllMarkNames, type MarkName } from './marks-config.ts'
 import routes from './routes';
 
 // Keep in sync with ambuda/utils/structuring.py::BlockType
-const BLOCK_TYPES = [
+export const BLOCK_TYPES = [
   { tag: 'p', label: 'Paragraph', color: 'blue' },
   { tag: 'verse', label: 'Verse', color: 'purple' },
   { tag: 'heading', label: 'Heading', color: 'orange' },
@@ -199,7 +199,13 @@ function imePlugin(getConfig: () => IMEConfig) {
     try {
       const coords = view.coordsAtPos(bufferStart);
       el.style.left = `${coords.left}px`;
-      el.style.top = `${coords.bottom + 4}px`;
+      const popupHeight = el.offsetHeight || 24;
+      const spaceBelow = window.innerHeight - coords.bottom;
+      if (spaceBelow < popupHeight + 8) {
+        el.style.top = `${coords.top - popupHeight - 4}px`;
+      } else {
+        el.style.top = `${coords.bottom + 4}px`;
+      }
     } catch {
       // coordsAtPos can fail if DOM layout is unavailable
     }
@@ -466,13 +472,15 @@ class BlockView {
 
   editor: any; // ProofingEditor instance
 
-  meterIndicator: HTMLSpanElement;
+  validationBadge: HTMLSpanElement;
 
-  meterReport: HTMLDivElement;
+  validationDetail: HTMLDivElement;
 
-  private _lastMeterText: string;
+  private _lastCheckText: string;
 
-  private _meterDebounceTimer: ReturnType<typeof setTimeout> | null;
+  private _lastCheckType: string;
+
+  private _checkDebounceTimer: ReturnType<typeof setTimeout> | null;
 
   private createLabeledInput(attrName: string, labelText: string, placeholder: string, width: string, extraClass: string = ''): { label: HTMLSpanElement; input: HTMLInputElement } {
     const label = document.createElement('span');
@@ -574,24 +582,25 @@ class BlockView {
     this.mergeLabel.appendChild(mergeText);
     this.controlsDOM.appendChild(this.mergeLabel);
 
-    // Meter indicator
-    this._lastMeterText = '';
-    this._meterDebounceTimer = null;
+    // Unified validation badge
+    this._lastCheckText = '';
+    this._lastCheckType = node.attrs.type || 'p';
+    this._checkDebounceTimer = null;
 
-    this.meterIndicator = document.createElement('span');
-    this.meterIndicator.className = 'cursor-pointer select-none ml-1';
-    this.meterIndicator.style.display = 'none';
-    this.meterIndicator.addEventListener('click', (e) => {
+    this.validationBadge = document.createElement('span');
+    this.validationBadge.className = 'cursor-pointer select-none ml-1';
+    this.validationBadge.style.display = 'none';
+    this.validationBadge.addEventListener('click', (e) => {
       e.preventDefault();
-      if (this.meterReport.innerHTML) {
-        this.meterReport.style.display = this.meterReport.style.display === 'none' ? 'block' : 'none';
+      if (this.validationDetail.innerHTML) {
+        this.validationDetail.style.display = this.validationDetail.style.display === 'none' ? 'block' : 'none';
       }
     });
-    this.controlsDOM.appendChild(this.meterIndicator);
+    this.controlsDOM.appendChild(this.validationBadge);
 
-    this.meterReport = document.createElement('div');
-    this.meterReport.className = 'text-xs px-2 py-1 bg-slate-50 border border-slate-200 rounded mb-1';
-    this.meterReport.style.display = 'none';
+    this.validationDetail = document.createElement('div');
+    this.validationDetail.className = 'text-xs px-2 py-1 bg-slate-50 border border-slate-200 rounded mb-1';
+    this.validationDetail.style.display = 'none';
 
     // Dropdown
     this.dropdownWrapper = document.createElement('div');
@@ -629,7 +638,7 @@ class BlockView {
     });
 
     this.dom.appendChild(this.controlsDOM);
-    this.dom.appendChild(this.meterReport);
+    this.dom.appendChild(this.validationDetail);
 
     // Content area
     this.contentDOM = document.createElement('div');
@@ -638,11 +647,12 @@ class BlockView {
     this.contentDOM.contentEditable = 'true';
     this.dom.appendChild(this.contentDOM);
 
-    // For verse blocks, record the initial text so update() doesn't
-    // re-trigger on the same content. The actual initial check is done
-    // as a batch by the editor after all BlockViews are constructed.
-    if ((node.attrs.type || 'p') === 'verse') {
-      this._lastMeterText = node.textContent;
+    // Record the initial text so update() doesn't re-trigger on the
+    // same content. The actual initial check is done as a batch by
+    // the editor after all BlockViews are constructed.
+    const blockType = node.attrs.type || 'p';
+    if (blockType !== 'ignore' && blockType !== 'metadata') {
+      this._lastCheckText = node.textContent;
     }
   }
 
@@ -728,20 +738,21 @@ class BlockView {
 
     this.updateFieldVisibility();
 
-    // Meter check for verse blocks
-    if (blockType === 'verse') {
-      const currentText = node.textContent;
-      if (currentText !== this._lastMeterText) {
-        this.scheduleMeterCheck(currentText);
+    const currentText = node.textContent;
+
+    // Trigger re-check if text or block type changed
+    if (blockType === 'ignore' || blockType === 'metadata') {
+      this.validationBadge.style.display = 'none';
+      this.validationDetail.style.display = 'none';
+      if (this._checkDebounceTimer) {
+        clearTimeout(this._checkDebounceTimer);
+        this._checkDebounceTimer = null;
       }
-    } else {
-      this.meterIndicator.style.display = 'none';
-      this.meterReport.style.display = 'none';
-      if (this._meterDebounceTimer) {
-        clearTimeout(this._meterDebounceTimer);
-        this._meterDebounceTimer = null;
-      }
-      this._lastMeterText = '';
+      this._lastCheckText = '';
+      this._lastCheckType = blockType;
+    } else if (currentText !== this._lastCheckText || blockType !== this._lastCheckType) {
+      this.scheduleCheck(currentText);
+      this._lastCheckType = blockType;
     }
 
     return true;
@@ -749,15 +760,15 @@ class BlockView {
 
   stopEvent(event: Event) {
     // Allow all events within the contentDOM (for editing)
-    // but prevent events in the controls and meter report from affecting ProseMirror
+    // but prevent events in the controls and validation detail from affecting ProseMirror
     const target = event.target as Node;
-    return this.controlsDOM.contains(target) || this.meterReport.contains(target);
+    return this.controlsDOM.contains(target) || this.validationDetail.contains(target);
   }
 
   ignoreMutation(mutation: MutationRecord) {
-    // Ignore all mutations outside contentDOM (controls bar, meter report, etc.)
+    // Ignore all mutations outside contentDOM (controls bar, validation detail, etc.)
     const target = mutation.target as Node;
-    if (this.controlsDOM.contains(target) || this.meterReport.contains(target)) {
+    if (this.controlsDOM.contains(target) || this.validationDetail.contains(target)) {
       return true;
     }
     if (mutation.type === 'attributes' && target !== this.contentDOM) {
@@ -853,53 +864,82 @@ class BlockView {
     this.editor.mergeBlockDown(this.getBlockIndex());
   }
 
-  applyMeterResult(data: { ok: boolean; meter?: string; scan?: Array<Array<{ text: string; weight: string; odd: boolean }>> }) {
-    this.meterIndicator.style.display = '';
-    this.meterIndicator.classList.remove('pm-meter-pass', 'pm-meter-fail');
-    if (data.ok) {
-      this.meterIndicator.textContent = `\u2713 meter: ${data.meter}`;
-      this.meterIndicator.classList.add('pm-meter-pass');
-      this.meterReport.innerHTML = '';
-      this.meterReport.style.display = 'none';
+  applyCheckResult(result: { ok: boolean; error_count: number; checks: Record<string, any> }) {
+    this.validationBadge.style.display = '';
+    this.validationBadge.classList.remove('pm-check-pass', 'pm-check-fail');
+    if (result.ok) {
+      this.validationBadge.textContent = '\u2713 pass';
+      this.validationBadge.classList.add('pm-check-pass');
+      this.validationDetail.innerHTML = '';
+      this.validationDetail.style.display = 'none';
     } else {
-      this.meterIndicator.textContent = '\u2717 meter unknown';
-      this.meterIndicator.classList.add('pm-meter-fail');
-      this.meterReport.innerHTML = this.renderScanReport(data.scan || []);
-      this.meterReport.style.display = 'none';
+      const n = result.error_count;
+      this.validationBadge.textContent = `\u2717 ${n} error${n !== 1 ? 's' : ''}`;
+      this.validationBadge.classList.add('pm-check-fail');
+      this.validationDetail.innerHTML = this.renderValidationDetail(result);
+      this.validationDetail.style.display = 'none';
     }
   }
 
-  private scheduleMeterCheck(text: string) {
-    if (this._meterDebounceTimer) {
-      clearTimeout(this._meterDebounceTimer);
+  private renderValidationDetail(result: { checks: Record<string, any> }): string {
+    const parts: string[] = [];
+    const { checks } = result;
+
+    if (checks.well_formed_text) {
+      const wft = checks.well_formed_text;
+      if (wft.ok) {
+        parts.push('<div>\u2713 text well-formed</div>');
+      } else {
+        const errs = (wft.errors || []).map((e: string) => this.escapeHTML(e)).join(', ');
+        parts.push(`<div>\u2717 text: ${errs}</div>`);
+      }
     }
-    this._lastMeterText = text;
-    this._meterDebounceTimer = setTimeout(() => {
-      this.runMeterCheck(text);
+
+    if (checks.meter) {
+      const m = checks.meter;
+      if (m.ok) {
+        parts.push(`<div>\u2713 meter: ${this.escapeHTML(m.meter || '')}</div>`);
+      } else {
+        parts.push('<div>\u2717 meter unknown</div>');
+        parts.push(this.renderScanReport(m.scan || []));
+      }
+    }
+
+    return parts.join('');
+  }
+
+  private scheduleCheck(text: string) {
+    if (this._checkDebounceTimer) {
+      clearTimeout(this._checkDebounceTimer);
+    }
+    this._lastCheckText = text;
+    this._checkDebounceTimer = setTimeout(() => {
+      this.runCheck(text);
     }, 800);
   }
 
-  private async runMeterCheck(text: string) {
+  private async runCheck(text: string) {
     if (!text.trim()) {
-      this.meterIndicator.style.display = 'none';
-      this.meterReport.style.display = 'none';
+      this.validationBadge.style.display = 'none';
+      this.validationDetail.style.display = 'none';
       return;
     }
 
+    const blockType = this.node.attrs.type || 'p';
     try {
-      const resp = await fetch(routes.proofingMeterCheck(), {
+      const resp = await fetch(routes.proofingBlockCheck(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ verses: [text] }),
+        body: JSON.stringify({ blocks: [{ text, type: blockType }] }),
       });
       if (!resp.ok) return;
       const data = await resp.json();
       if (data.results && data.results.length > 0) {
-        this.applyMeterResult(data.results[0]);
+        this.applyCheckResult(data.results[0]);
       }
     } catch (err) {
-      console.error('[MeterCheck] Fetch error:', err);
-      this.meterIndicator.style.display = 'none';
+      console.error('[BlockCheck] Fetch error:', err);
+      this.validationBadge.style.display = 'none';
     }
   }
 
@@ -926,8 +966,8 @@ class BlockView {
   }
 
   destroy() {
-    if (this._meterDebounceTimer) {
-      clearTimeout(this._meterDebounceTimer);
+    if (this._checkDebounceTimer) {
+      clearTimeout(this._checkDebounceTimer);
     }
     // Unregister this BlockView from the editor
     if (this.editor.blockViews) {
@@ -1349,35 +1389,36 @@ export default class {
       },
     });
 
-    // Batch meter check for all verse blocks on initial load
-    this.runBatchMeterCheck();
+    // Batch block check for all non-empty, non-ignore/metadata blocks on initial load
+    this.runBatchBlockCheck();
   }
 
-  private async runBatchMeterCheck() {
-    const verseViews: BlockView[] = [];
-    const verses: string[] = [];
+  private async runBatchBlockCheck() {
+    const checkViews: BlockView[] = [];
+    const blocks: Array<{ text: string; type: string }> = [];
     this.blockViews.forEach((bv) => {
-      if ((bv.node.attrs.type || 'p') === 'verse' && bv.node.textContent.trim()) {
-        verseViews.push(bv);
-        verses.push(bv.node.textContent);
+      const blockType = bv.node.attrs.type || 'p';
+      if (blockType !== 'ignore' && blockType !== 'metadata' && bv.node.textContent.trim()) {
+        checkViews.push(bv);
+        blocks.push({ text: bv.node.textContent, type: blockType });
       }
     });
-    if (!verses.length) return;
+    if (!blocks.length) return;
 
     try {
-      const resp = await fetch(routes.proofingMeterCheck(), {
+      const resp = await fetch(routes.proofingBlockCheck(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ verses }),
+        body: JSON.stringify({ blocks }),
       });
       if (!resp.ok) return;
       const data = await resp.json();
       const results = data.results || [];
-      for (let i = 0; i < verseViews.length && i < results.length; i += 1) {
-        verseViews[i].applyMeterResult(results[i]);
+      for (let i = 0; i < checkViews.length && i < results.length; i += 1) {
+        checkViews[i].applyCheckResult(results[i]);
       }
     } catch (err) {
-      console.error('[MeterCheck] Batch fetch error:', err);
+      console.error('[BlockCheck] Batch fetch error:', err);
     }
   }
 
@@ -1574,6 +1615,24 @@ export default class {
     }
     tr = tr.setSelection(Selection.near(tr.doc.resolve(targetPos + 1)));
 
+    dispatch(tr);
+
+    if (this.onChange) {
+      this.onChange();
+    }
+  }
+
+  setActiveBlockType(typeName: string) {
+    const { state, dispatch } = this.view;
+    const blockIndex = this.getBlockIndexFromSelection();
+    if (blockIndex < 0) return;
+
+    const blockPos = this.getBlockStartPos(blockIndex);
+    const block = state.doc.child(blockIndex);
+    const tr = state.tr.setNodeMarkup(blockPos, undefined, {
+      ...block.attrs,
+      type: typeName,
+    });
     dispatch(tr);
 
     if (this.onChange) {

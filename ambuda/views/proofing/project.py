@@ -294,6 +294,35 @@ def activity(slug):
     )
 
 
+@bp.route("/<slug>/tools")
+@p2_required
+def tools(slug):
+    """Show project tools (batch operations, reordering, etc.)."""
+    project_ = q.project(slug)
+    if project_ is None:
+        abort(404)
+
+    return render_template("proofing/projects/tools.html", project=project_)
+
+
+@bp.route("/<slug>/tools/uncovered-blocks")
+@p2_required
+def uncovered_blocks(slug):
+    """Show blocks not matched by any publish config filter."""
+    from ambuda.utils.text_publishing import find_uncovered_blocks
+
+    project_ = q.project(slug)
+    if project_ is None:
+        abort(404)
+
+    blocks = find_uncovered_blocks(project_)
+    return render_template(
+        "proofing/projects/uncovered-blocks.html",
+        project=project_,
+        uncovered_blocks=blocks,
+    )
+
+
 @bp.route("/<slug>/edit", methods=["GET", "POST"])
 @p2_required
 def edit(slug):

@@ -132,6 +132,15 @@
     <div class="flex">
 
     <div class="relative">
+      {{ _dropdown_button('proofing', _('Proofing')) }}
+      <div x-show="activeMenu === 'proofing'" @mousedown.outside="activeMenu = null" class="dropdown-pane w-48">
+        <a class="dropdown-item" href="{{ url_for('proofing.dashboard') }}">{{ _('Dashboard') }}</a>
+        <a class="dropdown-item" href="{{ url_for('proofing.index') }}">{{ _('All projects') }}</a>
+        <a class="dropdown-item" href="{{ url_for('proofing.texts') }}">{{ _('All texts') }}</a>
+      </div>
+    </div>
+
+    <div class="relative">
       {{ _dropdown_button('project', _('Project')) }}
       <div x-show="activeMenu === 'project'" @mousedown.outside="activeMenu = null" class="dropdown-pane w-48">
         <a class="dropdown-item" href="{{ url_for('proofing.project.summary', slug=project.slug) }}">{{ _('Index') }}</a>
@@ -500,8 +509,14 @@
           <button type="button"
                   @click="executeCommand(index)"
                   :class="index === commandPaletteSelected ? 'bg-blue-100' : 'hover:bg-slate-50'"
-                  class="block w-full text-left p-3"
-                  x-text="cmd.label">
+                  class="flex w-full text-left p-3 items-center justify-between">
+            <span x-text="cmd.label"></span>
+            <span x-show="cmd.code" class="text-xs text-slate-400 ml-4">
+              <span x-show="cmd.code && cmd.code.startsWith(commandPaletteQuery.toLowerCase()) && commandPaletteQuery.length > 0"
+                    x-text="cmd.code?.slice(0, commandPaletteQuery.length)"
+                    class="font-bold text-blue-500"></span><span
+                    x-text="cmd.code && cmd.code.startsWith(commandPaletteQuery.toLowerCase()) && commandPaletteQuery.length > 0 ? cmd.code?.slice(commandPaletteQuery.length) : cmd.code"></span>
+            </span>
           </button>
         </template>
       </div>
@@ -599,18 +614,28 @@
         {% endtrans %}</p>
       </div>
 
-      <div class="bg-slate-100 p-4 border-t flex justify-end gap-3">
-        <button type="button"
-                class="px-4 py-2 border border-slate-300 rounded hover:bg-slate-200"
-                @click="closeModal">
-          {{ _('Cancel') }}
-        </button>
-        <button type="button"
-                class="btn btn-submit"
-                :disabled="isSaving"
-                @click="submitFormFromModal"
-                x-text="isSaving ? '{{ _("Saving...") }}' : (pageState.canSaveDirectly ? '{{ _("Submit my changes") }}' : '{{ _("Submit suggestion") }}')">
-        </button>
+      <div class="bg-slate-100 p-4 border-t flex items-center justify-between">
+        <label x-show="pageState.canSaveDirectly && pageState.nextSlug"
+               class="flex items-center gap-2 cursor-pointer text-sm text-slate-600">
+          <input type="checkbox" class="w-4 h-4"
+                 x-model="advanceAfterSubmit"
+                 @change="saveSettings()">
+          {{ _('After submit, take me to the next page') }}
+        </label>
+        <span x-show="!(pageState.canSaveDirectly && pageState.nextSlug)"></span>
+        <div class="flex gap-3">
+          <button type="button"
+                  class="px-4 py-2 border border-slate-300 rounded hover:bg-slate-200"
+                  @click="closeModal">
+            {{ _('Cancel') }}
+          </button>
+          <button type="button"
+                  class="btn btn-submit"
+                  :disabled="isSaving"
+                  @click="submitFormFromModal"
+                  x-text="isSaving ? '{{ _("Saving...") }}' : (pageState.canSaveDirectly ? '{{ _("Submit") }}' : '{{ _("Submit suggestion") }}')">
+          </button>
+        </div>
       </div>
     </div>
   </div>

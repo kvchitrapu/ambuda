@@ -2,7 +2,7 @@
 /* Transcription and proofreading interface. */
 
 import { $ } from './core.ts';
-import ProofingEditor, { XMLView } from './prosemirror-editor.ts';
+import ProofingEditor, { XMLView, BLOCK_TYPES } from './prosemirror-editor.ts';
 import { INLINE_MARKS, MARK_GROUPS } from './marks-config.ts';
 import routes from './routes';
 
@@ -260,6 +260,8 @@ export default () => ({
   trackBoundingBox: false,
   // If true, invert the colors of the page image
   invertImageColors: false,
+  // If true, navigate to next page after submitting
+  advanceAfterSubmit: false,
   // OCR bounding box highlighting
   boundingBoxes: [],
   boundingBoxLines: [],
@@ -287,19 +289,7 @@ export default () => ({
     // the underlying data model and causes bizarre errors, e.g.:
     //
     // https://discuss.prosemirror.net/t/getting-rangeerror-applying-a-mismatched-transaction-even-with-trivial-code/4948/3
-    if (this.viewMode === ViewType.XML) {
-      this.editor = new XMLView(editorElement, initialContent, () => {
-        this.hasUnsavedChanges = true;
-        $('#content').value = Alpine.raw(this.editor).getText();
-      }, this.textZoom);
-    } else {
-      this.editor = new ProofingEditor(editorElement, initialContent, () => {
-        this.hasUnsavedChanges = true;
-        $('#content').value = Alpine.raw(this.editor).getText();
-      }, this.showAdvancedOptions, this.textZoom, (context) => {
-        this.onActiveWordChange(context);
-      }, () => ({ enabled: this.imeEnabled, fromScript: this.fromScript, toScript: this.toScript }));
-    }
+    this.editor = this.createEditor(editorElement, initialContent, this.viewMode);
 
     // Set `imageZoom` only after the viewer is fully initialized.
     this.imageViewer = initializeImageViewer(this.pageState.imageUrl);
@@ -328,7 +318,14 @@ export default () => ({
   getCommands() {
     const markCommands = INLINE_MARKS.map((mark) => ({
       label: `Edit > Mark as '${mark.label}'`,
+      code: `m${mark.name[0]}${mark.name.slice(1)}`,
       action: () => this.toggleMark(mark.name),
+    }));
+
+    const blockTypeCommands = BLOCK_TYPES.map((bt) => ({
+      label: `Edit > Set block to '${bt.label}'`,
+      code: `b${bt.tag}`,
+      action: () => Alpine.raw(this.editor).setActiveBlockType(bt.tag),
     }));
 
     return [
@@ -341,22 +338,37 @@ export default () => ({
       { label: 'Edit > Merge block up', action: () => this.mergeBlockUp() },
       { label: 'Edit > Merge block down', action: () => this.mergeBlockDown() },
       ...markCommands,
+      ...blockTypeCommands,
       { label: 'View > Track bounding box', action: () => this.toggleTrackBoundingBox() },
       { label: 'View > Show image on left', action: () => this.displayImageOnLeft() },
       { label: 'View > Show image on right', action: () => this.displayImageOnRight() },
       { label: 'View > Show image on top', action: () => this.displayImageOnTop() },
       { label: 'View > Show image on bottom', action: () => this.displayImageOnBottom() },
       { label: 'Tools > Normalize', action: () => this.openNormalizeModal() },
-      { label: 'Tools > Transliterate', action: () => this.openTransliterateModal() },
+      { label: 'Tools > Transliterate', code: 'tt', action: () => this.openTransliterateModal() },
       { label: 'Tools > Auto-structure', action: () => this.openAutoStructureModal() },
-      { label: 'Tools > Transliterator IME', action: () => this.toggleIME() },
+      { label: 'Tools > Transliterator IME', code: 'ti', action: () => this.toggleIME() },
     ];
   },
 
   getFilteredCommands() {
     const query = this.commandPaletteQuery;
     if (!query) return this.getCommands();
-    return this.getCommands().filter((cmd) => fuzzyMatch(query, cmd.label));
+
+    const lowerQuery = query.toLowerCase();
+    const codeMatches = [];
+    const fuzzyMatches = [];
+
+    for (const cmd of this.getCommands()) {
+      const isShortcodeMatch = cmd.code && cmd.code.startsWith(lowerQuery);
+      if (isShortcodeMatch) {
+        codeMatches.push(cmd);
+      } else if (fuzzyMatch(query, cmd.label)) {
+        fuzzyMatches.push(cmd);
+      }
+    }
+
+    return [...codeMatches, ...fuzzyMatches];
   },
 
   openCommandPalette() {
@@ -403,6 +415,7 @@ export default () => ({
       if (this.activeModal === ModalType.CommandPalette) {
         // without this guard, alpine closes the wrong modal (eg transliterator)
         this.closeModal();
+        Alpine.raw(this.editor).focus();
       }
     }
   },
@@ -438,6 +451,7 @@ export default () => ({
 
         this.trackBoundingBox = settings.trackBoundingBox || false;
         this.invertImageColors = settings.invertImageColors || false;
+        this.advanceAfterSubmit = settings.advanceAfterSubmit || false;
         this.splitPercent = settings.splitPercent || 50;
 
         // Normalize preferences (default to true if not set)
@@ -473,6 +487,7 @@ export default () => ({
       normalizeReplaceColonVisarga: this.normalizeReplaceColonVisarga,
       normalizeReplaceSAvagraha: this.normalizeReplaceSAvagraha,
       normalizeReplaceDoublePipe: this.normalizeReplaceDoublePipe,
+      advanceAfterSubmit: this.advanceAfterSubmit,
       splitPercent: this.splitPercent,
     };
     localStorage.setItem(CONFIG_KEY, JSON.stringify(settings));
@@ -813,6 +828,21 @@ export default () => ({
     this.saveSettings();
   },
 
+  createEditor(element, content, viewMode) {
+    const onChange = () => {
+      this.hasUnsavedChanges = true;
+      $('#content').value = Alpine.raw(this.editor).getText();
+    };
+    if (viewMode === ViewType.XML) {
+      return new XMLView(element, content, onChange, this.textZoom);
+    }
+    return new ProofingEditor(
+      element, content, onChange, this.showAdvancedOptions, this.textZoom,
+      (context) => this.onActiveWordChange(context),
+      () => ({ enabled: this.imeEnabled, fromScript: this.fromScript, toScript: this.toScript }),
+    );
+  },
+
   displayView(viewMode) {
     // Already showing -- just return.
     if (this.viewMode === viewMode) return;
@@ -822,24 +852,12 @@ export default () => ({
     const content = Alpine.raw(this.editor).getText();
     Alpine.raw(this.editor).destroy();
 
-    if (viewMode === ViewType.Visual) {
-      try {
-        this.editor = new ProofingEditor(editorElement, content, () => {
-          this.hasUnsavedChanges = true;
-          $('#content').value = Alpine.raw(this.editor).getText();
-        }, this.showAdvancedOptions, this.textZoom, (context) => {
-          this.onActiveWordChange(context);
-        }, () => ({ enabled: this.imeEnabled, fromScript: this.fromScript, toScript: this.toScript }));
-      } catch (error) {
-        this.xmlParseError = `Invalid XML: ${error.message}`;
-        console.error('Failed to parse XML:', error);
-        return;
-      }
-    } else if (viewMode === ViewType.XML) {
-      this.editor = new XMLView(editorElement, content, () => {
-        this.hasUnsavedChanges = true;
-        $('#content').value = Alpine.raw(this.editor).getText();
-      }, this.textZoom);
+    try {
+      this.editor = this.createEditor(editorElement, content, viewMode);
+    } catch (error) {
+      this.xmlParseError = `Invalid XML: ${error.message}`;
+      console.error('Failed to parse XML:', error);
+      return;
     }
 
     // Reset state + focus
@@ -1134,9 +1152,13 @@ export default () => ({
     return div.innerHTML;
   },
 
-  submitFormFromModal() {
+  async submitFormFromModal() {
     this.closeModal();
-    this.saveViaAPI();
+    const ok = await this.saveViaAPI();
+    if (ok && this.advanceAfterSubmit && this.pageState.nextSlug) {
+      await this.loadPage(this.pageState.nextSlug, true);
+      this.showAlert('success', 'Saved previous page.');
+    }
   },
 
   async saveViaAPI() {
@@ -1183,6 +1205,7 @@ export default () => ({
           if (statusInput) statusInput.value = data.new_status;
         }
         this.showAlert('success', data.message);
+        return true;
       } else if (data.conflict_content) {
         this.showAlert('error', `${data.message}\n\nConflict content is available in the console.`);
         console.warn('Edit conflict content:', data.conflict_content);

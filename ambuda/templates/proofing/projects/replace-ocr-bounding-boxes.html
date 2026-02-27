@@ -13,7 +13,7 @@
 {{ components.flash_messages() }}
 
 {{ m.project_header_nested('Replace OCR bounding boxes', project) }}
-{{ m.project_tabs(project=project, active='edit') }}
+{{ m.project_tabs(project=project, active='tools', is_p2=current_user.is_p2) }}
 
 <div class="prose">
   <p>Click the button below to re-run OCR on every page and update only the

@@ -253,6 +253,103 @@ class Filter:
         return _matches(self.predicate)
 
 
+@dc.dataclass
+class UncoveredBlock:
+    """A block not matched by any publish config filter."""
+
+    page_slug: str
+    image_number: int
+    block_index: int
+    block_tag: str
+    block_text: str
+
+
+def find_uncovered_blocks(project: db.Project) -> list[UncoveredBlock]:
+    """Find all blocks not matched by any publish config's target filter.
+
+    Skips 'ignore' and 'metadata' blocks. Returns a list of UncoveredBlock.
+    """
+    from ambuda.models.proofing import ProjectConfig
+
+    try:
+        config = ProjectConfig.model_validate_json(project.config or "{}")
+    except Exception:
+        config = ProjectConfig()
+
+    if not config.publish:
+        return []
+
+    # Build filters from all publish configs
+    filters: list[Filter] = []
+    for pc in config.publish:
+        target = pc.target or ""
+        try:
+            if target.startswith("("):
+                filters.append(Filter(target))
+            elif target:
+                filters.append(Filter(f"(label {target})"))
+            # Empty target matches everything — no uncovered blocks possible
+            else:
+                return []
+        except ValueError:
+            continue
+
+    if not filters:
+        return []
+
+    # Load latest revisions
+    session = q.get_session()
+    subq = (
+        select(db.Revision.page_id, func.max(db.Revision.id).label("max_id"))
+        .where(db.Revision.project_id == project.id)
+        .group_by(db.Revision.page_id)
+        .subquery()
+    )
+    revisions = (
+        session.execute(
+            select(db.Revision)
+            .join(subq, db.Revision.id == subq.c.max_id)
+            .join(db.Page, db.Revision.page_id == db.Page.id)
+            .order_by(db.Page.order)
+        )
+        .scalars()
+        .all()
+    )
+
+    page_id_to_slug = {page.id: page.slug for page in project.pages}
+    page_id_to_image_number = {page.id: i + 1 for i, page in enumerate(project.pages)}
+
+    uncovered: list[UncoveredBlock] = []
+    for revision in revisions:
+        image_number = page_id_to_image_number.get(revision.page_id)
+        if image_number is None:
+            continue
+
+        page_text = revision.content
+        try:
+            page_xml = _safe_fromstring(page_text)
+        except etree.XMLSyntaxError:
+            continue
+
+        page_slug = page_id_to_slug.get(revision.page_id, "?")
+
+        for block_index, block_el in enumerate(page_xml):
+            tag = block_el.tag
+            if tag in (BlockType.IGNORE, BlockType.METADATA):
+                continue
+
+            ib = IndexedBlock(revision, image_number, block_index, page_xml)
+            if not any(f.matches(ib) for f in filters):
+                text = (block_el.text or "").strip()
+                if text:
+                    text = text[:80] + ("..." if len(text) > 80 else "")
+                uncovered.append(
+                    UncoveredBlock(page_slug, image_number, block_index, tag, text)
+                )
+
+    return uncovered
+
+
 # TODO:
 # - keep <l>-final "-" and mark as appropriate elem
 # x concatenate within <sp> for speaker

@@ -35,7 +35,7 @@
 
 
 {# Project-level tabs. #}
-{% macro project_tabs(project, active, is_mod = false) %}
+{% macro project_tabs(project, active, is_mod = false, is_p2 = false) %}
 {% set routes = [
   ("summary",  _("Summary"),   url_for("proofing.project.summary", slug=project.slug)),
   ("activity", _("Activity"),  url_for("proofing.project.activity", slug=project.slug)),
@@ -44,6 +44,9 @@
   ("download", _("Download"),  url_for("proofing.project.download", slug=project.slug)),
   ("publish",  _("Publish"),   url_for("proofing.publish.config", slug=project.slug)),
 ] %}
+{% if is_p2 or is_mod %}{% set routes = routes + [
+  ("tools",    _("Tools"),     url_for("proofing.project.tools", slug=project.slug)),
+] %}{% endif %}
 {% if is_mod %}{% set routes = routes + [
   ("stats",    _("Stats"),     url_for("proofing.project.stats", slug=project.slug)),
   ("admin",    _("Admin"),     url_for("proofing.project.admin", slug=project.slug)),

@@ -392,28 +392,28 @@ class WellFormedText(XMLValidationRule):
     # - https://www.unicode.org/charts/PDF/UA8E0.pdf
     RE_ILLEGAL = r"([^\u0900-\u097F\ua8e0-\ua8ff\s!,\-\.])"
 
+    # Sequences that are valid Unicode but impossible in Sanskrit (common OCR artifacts).
+    FORBIDDEN_SEQUENCES = ["क्लृ"]
+
+    def _check_text(self, text: str, elem: etree._Element) -> str | None:
+        """Check a text string for issues. Returns an error message or None."""
+        if m := re.search(self.RE_ILLEGAL, text):
+            return f"Unexpected character '{m.group(1)}' in text <{text}>"
+        for seq in self.FORBIDDEN_SEQUENCES:
+            if seq in text:
+                return f"Forbidden sequence '{seq}' in text <{text}>"
+        return None
+
     def process(self, xml: etree._Element) -> None:
         for elem in xml.iter():
             self.ret.incr_total()
-            if m := re.search(self.RE_ILLEGAL, elem.text or ""):
+            error = self._check_text(elem.text or "", elem) or self._check_text(
+                elem.tail or "", elem
+            )
+            if error:
                 block_xml = _to_string(elem)[:1000]
                 self.ret.add_structured_error(
-                    XMLError(
-                        messages=[
-                            f"Unexpected character '{m.group(1)}' in text <{elem.text or ''}>"
-                        ],
-                        xml=block_xml,
-                    ).model_dump()
-                )
-            elif m := re.search(self.RE_ILLEGAL, elem.tail or ""):
-                block_xml = _to_string(elem)[:1000]
-                self.ret.add_structured_error(
-                    XMLError(
-                        messages=[
-                            f"Unexpected character '{m.group(1)}' in text <{elem.tail or ''}>"
-                        ],
-                        xml=block_xml,
-                    ).model_dump()
+                    XMLError(messages=[error], xml=block_xml).model_dump()
                 )
             else:
                 self.ret.incr_ok()

@@ -47,7 +47,7 @@
 {{ components.flash_messages() }}
 
 {{ m.project_header_nested('Batch Edit', project) }}
-{{ m.project_tabs(project=project, active='edit') }}
+{{ m.project_tabs(project=project, active='tools', is_p2=current_user.is_p2) }}
 
 {% set total_pages = project.pages|length %}
 {% set pages_count = pages_with_content|length %}

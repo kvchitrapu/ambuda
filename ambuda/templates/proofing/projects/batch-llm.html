@@ -13,7 +13,7 @@
 {{ components.flash_messages() }}
 
 {{ m.project_header_nested('Batch LLM', project) }}
-{{ m.project_tabs(project=project, active='edit') }}
+{{ m.project_tabs(project=project, active='tools', is_p2=current_user.is_p2) }}
 
 <div class="prose">
   <p>Run an LLM prompt over a range of pages. Results are stored as suggestions for review.</p>

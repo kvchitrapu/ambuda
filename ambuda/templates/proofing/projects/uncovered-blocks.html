@@ -1,0 +1,50 @@
+{% extends 'proofing/base-sidebar.html' %}
+{% import "macros/proofing.html" as m %}
+
+{% block title %}Uncovered Blocks: {{ project.display_title }} | Ambuda{% endblock %}
+
+{% block sidebar %}{{ m.main_nav('projects', current_user=current_user) }}{% endblock %}
+
+{% block content %}
+{{ m.project_header_nested('Uncovered Blocks', project) }}
+{{ m.project_tabs(project=project, active='tools', is_p2=current_user.is_p2) }}
+
+<div class="prose max-w-none">
+  <p class="text-sm text-slate-600">
+    {{ _('Blocks not matched by any publish config filter (excluding ignore/metadata blocks).') }}
+  </p>
+
+  {% if uncovered_blocks %}
+  <p class="text-sm"><strong>{{ uncovered_blocks|length }}</strong> uncovered block{{ 's' if uncovered_blocks|length != 1 else '' }}.</p>
+
+  <table class="text-sm not-prose w-full">
+    <thead>
+      <tr class="bg-slate-100">
+        <th class="px-3 py-2 text-left">{{ _('Page') }}</th>
+        <th class="px-3 py-2 text-left">{{ _('Image #') }}</th>
+        <th class="px-3 py-2 text-left">{{ _('Block #') }}</th>
+        <th class="px-3 py-2 text-left">{{ _('Type') }}</th>
+        <th class="px-3 py-2 text-left">{{ _('Text') }}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for b in uncovered_blocks %}
+      <tr class="border-t border-slate-200 hover:bg-slate-50">
+        <td class="px-3 py-1.5">
+          <a class="text-blue-600 hover:underline"
+             href="{{ url_for('proofing.page.edit', project_slug=project.slug, page_slug=b.page_slug) }}">{{ b.page_slug }}</a>
+        </td>
+        <td class="px-3 py-1.5">{{ b.image_number }}</td>
+        <td class="px-3 py-1.5">{{ b.block_index }}</td>
+        <td class="px-3 py-1.5"><code>{{ b.block_tag }}</code></td>
+        <td class="px-3 py-1.5 text-slate-500 deva-serif">{{ b.block_text }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="text-green-700">{{ _('All blocks are covered by at least one publish config.') }}</p>
+  {% endif %}
+</div>
+
+{% endblock %}
