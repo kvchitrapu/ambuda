@@ -25,7 +25,7 @@ from sqlalchemy import (
 )
 from sqlalchemy import Text as _Text
 from sqlalchemy import select, exists
-from sqlalchemy.orm import relationship, Mapped, mapped_column, object_session
+from sqlalchemy.orm import backref, relationship, Mapped, mapped_column, object_session
 
 from ambuda.models.base import Base, foreign_key, pk
 
@@ -360,7 +360,10 @@ class TextReport(Base):
     #: Lightweight summary: {"num_passed": int, "num_total": int}
     summary = Column(JSON, nullable=True)
 
-    text = relationship("Text", backref="reports")
+    text = relationship(
+        "Text",
+        backref=backref("reports", cascade="all, delete-orphan"),
+    )
 
     @staticmethod
     def rerun_lock_key(text_id: int) -> str:
