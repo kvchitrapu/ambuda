@@ -282,6 +282,12 @@ MODEL_CONFIG = [
         read_only=True,
     ),
     ModelConfig(
+        model=db.TextReport,
+        list_columns=["id", "text_id", "created_at", "updated_at"],
+        category=Category.TEXTS,
+        read_only=True,
+    ),
+    ModelConfig(
         model=db.TextExport,
         list_columns=["id", "slug"],
         category=Category.TEXTS,
