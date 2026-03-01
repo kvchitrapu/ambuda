@@ -21,6 +21,7 @@ from sqlalchemy import select, func
 
 from ambuda import database as db
 from ambuda.consts import SINGLE_SECTION_SLUG
+from ambuda.enums import SitePageStatus
 from ambuda.utils.project_structuring import ProofPage
 from ambuda.utils import project_utils
 from ambuda import queries as q
@@ -323,11 +324,16 @@ def find_uncovered_blocks(project: db.Project) -> list[UncoveredBlock]:
         .all()
     )
 
+    skip_page_ids = {
+        page.id for page in project.pages if page.status.name == SitePageStatus.SKIP
+    }
     page_id_to_slug = {page.id: page.slug for page in project.pages}
     page_id_to_image_number = {page.id: i + 1 for i, page in enumerate(project.pages)}
 
     uncovered: list[UncoveredBlock] = []
     for revision in revisions:
+        if revision.page_id in skip_page_ids:
+            continue
         image_number = page_id_to_image_number.get(revision.page_id)
         if image_number is None:
             continue
@@ -945,10 +951,6 @@ def _rewrite_project_to_tei_xml(
                         page_id=n_to_page_id[n],
                     )
                 )
-
-    page_statuses = Counter()
-    for revision in revisions:
-        page_statuses[revision.status.name] += 1
 
     return TEIRewrite(items=items, errors=[], page_statuses=page_statuses)
 
