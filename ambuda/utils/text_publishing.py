@@ -662,15 +662,22 @@ class NCounter:
         self.block_ns[tag] = n
         return n
 
+    @staticmethod
+    def _counter_key(tei_xml: etree._Element) -> str:
+        if tei_xml.tag == "title" and tei_xml.get("type") == "sub":
+            return "subtitle"
+        return tei_xml.tag
+
     def maybe_assign_n(self, explicit_n: str | None, tei_xml: etree._Element):
+        key = self._counter_key(tei_xml)
         if tei_xml.tag in {"note", "sp", InlineType.SPEAKER}:
             # Do nothing -- these elements should never have an "n" assigned.
             pass
         elif explicit_n:
-            self.override(tei_xml.tag, explicit_n)
+            self.override(key, explicit_n)
             tei_xml.attrib["n"] = explicit_n
         else:
-            n = self.next(tei_xml.tag)
+            n = self.next(key)
             tei_xml.attrib["n"] = n
 
             if tei_xml.tag == "sp":
@@ -839,12 +846,13 @@ def _rewrite_project_to_tei_xml(
                     merges[xml.tag] = data.xml if data.merge_next else None
 
                 # @n -- populate from `ns` counter if not set manually.
+                counter_key = NCounter._counter_key(xml)
                 if "n" in xml.attrib:
                     n = xml.attrib["n"]
-                    ns.override(xml.tag, n)
+                    ns.override(counter_key, n)
                     n_overrides.add(n)
                 else:
-                    xml.attrib["n"] = ns.next(xml.tag)
+                    xml.attrib["n"] = ns.next(counter_key)
 
                 # n -> page_id mapping
                 n_to_page_id[xml.attrib["n"]] = cur_page_id
@@ -861,7 +869,7 @@ def _rewrite_project_to_tei_xml(
 
     def _sanitize_ns(divs: list[etree._Element]):
         nonlocal n_to_page_id
-        # Single head / trailer
+        # Single head / trailer / title
         for div in divs:
             for singleton_tag in ("head", "trailer"):
                 matches = div.findall(singleton_tag)
@@ -870,6 +878,23 @@ def _rewrite_project_to_tei_xml(
                     matches[0].set("n", singleton_tag)
                     if old_n in n_to_page_id:
                         n_to_page_id[singleton_tag] = n_to_page_id.pop(old_n)
+
+            titles = div.findall("title")
+            main_titles = [t for t in titles if t.get("type") != "sub"]
+            if len(main_titles) == 1 and main_titles[0].get("n") not in n_overrides:
+                title = main_titles[0]
+                old_n = title.get("n")
+                title.set("n", "title")
+                if old_n in n_to_page_id:
+                    n_to_page_id["title"] = n_to_page_id.pop(old_n)
+
+            subtitles = [t for t in titles if t.get("type") == "sub"]
+            if len(subtitles) == 1 and subtitles[0].get("n") not in n_overrides:
+                subtitle = subtitles[0]
+                old_n = subtitle.get("n")
+                subtitle.set("n", "subtitle")
+                if old_n in n_to_page_id:
+                    n_to_page_id["subtitle"] = n_to_page_id.pop(old_n)
 
         # If no <p> in divisions, use "1" instead of "lg1", etc.
         has_p = any(div.find("p") is not None for div in divs)
@@ -898,7 +923,7 @@ def _rewrite_project_to_tei_xml(
                 blocks.append(
                     TEIBlock(
                         xml=_to_string(child),
-                        slug=child.attrib["n"],
+                        slug=n,
                         page_id=n_to_page_id[n],
                     )
                 )

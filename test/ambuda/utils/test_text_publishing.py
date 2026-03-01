@@ -732,17 +732,61 @@ def _test_create_tei_document(input, expected):
                 )
             ],
         ),
+        # Single <title>
+        (
+            ["<page><title>foo</title></page>"],
+            [s.TEIBlock(xml='<title n="title">foo</title>', slug="title", page_id=0)],
+        ),
+        # Single subtitle
+        (
+            ["<page><subtitle>foo</subtitle></page>"],
+            [
+                s.TEIBlock(
+                    xml='<title type="sub" n="subtitle">foo</title>',
+                    slug="subtitle",
+                    page_id=0,
+                )
+            ],
+        ),
+        # Multiple subtitles
+        (
+            ["<page><subtitle>foo</subtitle><subtitle>bar</subtitle></page>"],
+            [
+                s.TEIBlock(
+                    xml='<title type="sub" n="subtitle1">foo</title>',
+                    slug="subtitle1",
+                    page_id=0,
+                ),
+                s.TEIBlock(
+                    xml='<title type="sub" n="subtitle2">bar</title>',
+                    slug="subtitle2",
+                    page_id=0,
+                ),
+            ],
+        ),
+        # Single <title> with subtitle
+        (
+            ["<page><title>foo</title><subtitle>bar</subtitle></page>"],
+            [
+                s.TEIBlock(xml='<title n="title">foo</title>', slug="title", page_id=0),
+                s.TEIBlock(
+                    xml='<title type="sub" n="subtitle">bar</title>',
+                    slug="subtitle",
+                    page_id=0,
+                ),
+            ],
+        ),
         # Multiple <head>
         (
             ["<page><head>foo</head><head>bar</head></page>"],
             [
                 s.TEIBlock(xml='<head n="head1">foo</head>', slug="head1", page_id=0),
-                s.TEIBlock(xml='<head n="head2">foo</head>', slug="head2", page_id=0),
+                s.TEIBlock(xml='<head n="head2">bar</head>', slug="head2", page_id=0),
             ],
         ),
         # Multiple <trailer>
         (
-            ["<page><trailer>foo</trailer></page>"],
+            ["<page><trailer>foo</trailer><trailer>bar</trailer></page>"],
             [
                 s.TEIBlock(
                     xml='<trailer n="trailer1">foo</trailer>',
@@ -750,7 +794,7 @@ def _test_create_tei_document(input, expected):
                     page_id=0,
                 ),
                 s.TEIBlock(
-                    xml='<trailer n="trailer2">foo</trailer>',
+                    xml='<trailer n="trailer2">bar</trailer>',
                     slug="trailer2",
                     page_id=0,
                 ),
@@ -758,7 +802,7 @@ def _test_create_tei_document(input, expected):
         ),
     ],
 )
-def _test_create_tei_document__rewrite_head_trailer(input, expected):
+def test_create_tei_document__rewrite_head_trailer(input, expected):
     _test_create_tei_document(input, expected)
 
 
