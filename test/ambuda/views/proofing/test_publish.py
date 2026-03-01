@@ -1,7 +1,7 @@
+import json
 import pytest
-from pydantic import ValidationError
 
-from ambuda.models.proofing import ProjectConfig, PublishConfig, LanguageCode
+from ambuda.models.proofing import LanguageCode
 from ambuda.views.proofing.publish import _validate_slug
 
 
@@ -42,39 +42,16 @@ def test_validate_slug_invalid(slug):
 
 @pytest.mark.parametrize("code", list(LanguageCode))
 def test_valid_language_codes(code):
-    config = PublishConfig(slug="test", title="Test", language=code.value)
-    assert config.language == code
-
-
-def test_default_language():
-    config = PublishConfig(slug="test", title="Test")
-    assert config.language == LanguageCode.SA
-
-
-def test_invalid_language_code():
-    with pytest.raises(ValidationError):
-        PublishConfig(slug="test", title="Test", language="xx")
-
-
-def test_empty_language_code():
-    with pytest.raises(ValidationError):
-        PublishConfig(slug="test", title="Test", language="")
-
-
-def test_language_codes_have_labels():
-    for code in LanguageCode:
-        assert isinstance(code.label, str)
-        assert len(code.label) > 0
+    assert isinstance(code.label, str)
+    assert len(code.label) > 0
 
 
 def test_publish_config_post__invalid_filter(rama_client):
-    config = ProjectConfig(
-        publish=[
-            PublishConfig(slug="test-text", title="Test", target="(image 1"),
-        ]
-    )
+    config_list = [
+        {"slug": "test-text", "title": "Test", "target": "(image 1"},
+    ]
     resp = rama_client.post(
         "/proofing/test-project/publish",
-        data={"config": config.model_dump_json()},
+        data={"config": json.dumps(config_list)},
     )
     assert resp.status_code == 302

@@ -709,7 +709,7 @@ def _test_create_tei_document(input, expected):
     project = db.Project(
         slug="test", display_title="Test", page_numbers="", pages=pages
     )
-    config = db.PublishConfig(slug="test", title="Test", target="(and)")
+    config = db.PublishConfig(slug="test", title="Test", target="(and)", order=0)
 
     conversion = s.create_tei_document(project, config, revisions=revisions)
     assert conversion.items == expected
@@ -866,7 +866,7 @@ def test_create_tei_document__page_order_differs_from_page_id():
         slug="test", display_title="Test", page_numbers="", pages=pages
     )
     # Select image 1 = visual position 1 = page_id=20 (order=0) = "b"
-    config = db.PublishConfig(slug="test", title="Test", target="(image 1)")
+    config = db.PublishConfig(slug="test", title="Test", target="(image 1)", order=0)
 
     conversion = s.create_tei_document(
         project,
@@ -904,7 +904,7 @@ def test_create_tei_document__pages_without_revisions_do_not_shift_image_numbers
         slug="test", display_title="Test", page_numbers="", pages=pages
     )
     # Select only image 3 — should match page_id=2 ("c"), not be shifted to image 2.
-    config = db.PublishConfig(slug="test", title="Test", target="(image 3)")
+    config = db.PublishConfig(slug="test", title="Test", target="(image 3)", order=0)
 
     conversion = s.create_tei_document(project, config, revisions=[r0, r2])
     assert conversion.items == [

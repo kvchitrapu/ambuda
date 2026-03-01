@@ -34,7 +34,6 @@ from ambuda.models.proofing import (
     LanguageCode,
     ProjectStatus,
     PublishConfig,
-    ProjectConfig,
 )
 from ambuda.models.texts import TextStatus
 from ambuda.tasks.text_exports import upload_xml_export
@@ -60,21 +59,14 @@ def _resolve_publish_config(
     if project_ is None:
         abort(404)
 
-    if not project_.config:
-        flash("No publish configuration found. Please configure first.", "error")
-        return None
+    session = q.get_session()
+    pc = session.execute(
+        sqla.select(PublishConfig).where(
+            PublishConfig.project_id == project_.id,
+            PublishConfig.slug == text_slug,
+        )
+    ).scalar_one_or_none()
 
-    try:
-        project_config = ProjectConfig.model_validate_json(project_.config or "{}")
-    except Exception:
-        flash("Could not validate project config.", "error")
-        return None
-
-    if not project_config.publish:
-        flash("No publish configuration found. Please configure first.", "error")
-        return None
-
-    pc = next((c for c in project_config.publish if c.slug == text_slug), None)
     if not pc:
         flash(f"No publish configuration found for text '{text_slug}'.", "error")
         return None
@@ -301,6 +293,31 @@ def _build_diff_lines(old_xml: str, new_xml: str) -> list[dict]:
 bp = Blueprint("publish", __name__)
 
 
+def _publish_config_fields():
+    """Return the field schema used by the JS component."""
+    return {
+        "properties": {
+            "title": {"type": "string"},
+            "slug": {"type": "string"},
+            "target": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "author": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "genre": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            "language": {
+                "$ref": "#/$defs/LanguageCode",
+                "default": "sa",
+            },
+            "parent_slug": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        },
+        "$defs": {
+            "LanguageCode": {
+                "type": "string",
+                "enum": [c.value for c in LanguageCode],
+            },
+        },
+        "required": ["slug", "title"],
+    }
+
+
 @bp.route("/<slug>/publish", methods=["GET", "POST"])
 @p2_required
 def config(slug):
@@ -309,8 +326,12 @@ def config(slug):
     if project_ is None:
         abort(404)
 
+    session = q.get_session()
+
     assert project_
     if request.method == "POST":
+        import json
+
         publish_json = request.form.get("config", "")
         default = lambda: render_template(
             "proofing/projects/publish.html",
@@ -319,19 +340,23 @@ def config(slug):
         )
 
         try:
-            new_config = ProjectConfig.model_validate_json(publish_json)
+            new_configs = json.loads(publish_json)
         except Exception as e:
             flash(f"Validation error: {e}", "error")
             return default()
 
-        for pc in new_config.publish:
-            slug_error = _validate_slug(pc.slug)
+        if not isinstance(new_configs, list):
+            flash("Expected a list of publish configurations.", "error")
+            return default()
+
+        for pc in new_configs:
+            slug_error = _validate_slug(pc.get("slug", ""))
             if slug_error:
                 flash(slug_error, "error")
                 return default()
 
-        for pc in new_config.publish:
-            target = pc.target or ""
+        for pc in new_configs:
+            target = pc.get("target") or ""
             try:
                 if target.startswith("("):
                     Filter(target)
@@ -339,52 +364,91 @@ def config(slug):
                     Filter(f"(label {target})")
             except ValueError as e:
                 flash(
-                    f"Invalid filter for '{pc.slug}': {e}",
+                    f"Invalid filter for '{pc.get('slug', '')}': {e}",
                     "error",
                 )
                 return redirect(url_for("proofing.publish.config", slug=slug))
 
-        session = q.get_session()
-        try:
-            old_config = ProjectConfig.model_validate_json(project_.config or "{}")
-        except Exception:
-            old_config = ProjectConfig()
-        old_slugs = {c.slug for c in old_config.publish}
+        old_slugs = {
+            c.slug
+            for c in session.execute(
+                sqla.select(PublishConfig).where(
+                    PublishConfig.project_id == project_.id
+                )
+            )
+            .scalars()
+            .all()
+        }
 
-        for pc in new_config.publish:
-            if pc.slug not in old_slugs:
+        for pc in new_configs:
+            pc_slug = pc.get("slug", "")
+            if pc_slug not in old_slugs:
                 existing_text = session.execute(
-                    sqla.select(db.Text).where(db.Text.slug == pc.slug)
+                    sqla.select(db.Text).where(db.Text.slug == pc_slug)
                 ).scalar_one_or_none()
                 if existing_text:
                     flash(
-                        f"A text with slug '{pc.slug}' already exists. "
+                        f"A text with slug '{pc_slug}' already exists. "
                         "Please choose a different slug.",
                         "error",
                     )
                     return default()
 
-        # TODO: tighten restrictions here -- should only be able to update 'publish' ?
-        if new_config != old_config:
-            project_.config = new_config.model_dump_json()
-            session.commit()
-            flash("Configuration saved successfully.", "success")
-        else:
-            flash("No changes to save.", "info")
+        # Delete old configs and insert new ones
+        session.execute(
+            sqla.delete(PublishConfig).where(PublishConfig.project_id == project_.id)
+        )
+        for order, pc in enumerate(new_configs):
+            # Look up text_id if a text with this slug exists
+            text_row = session.execute(
+                sqla.select(db.Text).where(db.Text.slug == pc.get("slug", ""))
+            ).scalar_one_or_none()
+            new_pc = PublishConfig(
+                project_id=project_.id,
+                text_id=text_row.id if text_row else None,
+                order=order,
+                slug=pc.get("slug", ""),
+                title=pc.get("title", ""),
+                target=pc.get("target") or None,
+                author=pc.get("author") or None,
+                genre=pc.get("genre") or None,
+                language=pc.get("language", "sa") or "sa",
+                parent_slug=pc.get("parent_slug") or None,
+            )
+            session.add(new_pc)
 
+        session.commit()
+        flash("Configuration saved successfully.", "success")
         return redirect(url_for("proofing.publish.config", slug=slug))
 
-    try:
-        project_config = ProjectConfig.model_validate_json(project_.config or "{}")
-    except Exception:
-        flash("Project config is invalid. Please contact an admin user.", "error")
-        return redirect(url_for("proofing.index"))
+    # GET: load existing configs from DB
+    configs = (
+        session.execute(
+            sqla.select(PublishConfig)
+            .where(PublishConfig.project_id == project_.id)
+            .order_by(PublishConfig.order)
+        )
+        .scalars()
+        .all()
+    )
 
-    config = project_config.model_dump()
-    config_schema = PublishConfig.model_json_schema()
+    publish_config = [
+        {
+            "slug": c.slug,
+            "title": c.title,
+            "target": c.target or "",
+            "author": c.author or "",
+            "genre": c.genre or "",
+            "language": c.language or "sa",
+            "parent_slug": c.parent_slug or "",
+            "_published": c.text_id is not None,
+        }
+        for c in configs
+    ]
+
+    config_schema = _publish_config_fields()
 
     # Get all genres and authors for datalist
-    session = q.get_session()
     genres = (
         session.execute(sqla.select(db.Genre).order_by(db.Genre.name)).scalars().all()
     )
@@ -397,7 +461,7 @@ def config(slug):
     return render_template(
         "proofing/projects/publish.html",
         project=project_,
-        publish_config=config,
+        publish_config=publish_config,
         publish_config_schema=config_schema,
         language_labels=language_labels,
         genres=genres,
@@ -532,6 +596,9 @@ def create(project_slug, text_slug):
         text.project_id = project_.id
         text.language = config.language
         text.title = config.title
+
+        # Link the publish config back to the text
+        config.text_id = text.id
 
         # Set author, and create it as needed.
         if config.author:

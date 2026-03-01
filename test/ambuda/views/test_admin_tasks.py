@@ -317,6 +317,17 @@ def test_import_projects_and_export_projects(admin_client):
     session.add(export_page)
     session.flush()
 
+    publish_config = db.PublishConfig(
+        project_id=export_project.id,
+        order=0,
+        slug="test-roundtrip-project",
+        title="Test Roundtrip Title",
+        author="Test PC Author",
+        genre="kavya",
+        language="sa",
+    )
+    session.add(publish_config)
+
     if user:
         revision = db.Revision(
             project_id=export_project.id,
@@ -382,7 +393,6 @@ def test_import_projects_and_export_projects(admin_client):
             "description": "",
             "notes": "",
             "page_numbers": "",
-            "config": Any,
             "created_at": Any,
             "updated_at": Any,
             "board_id": Any,
@@ -404,6 +414,24 @@ def test_import_projects_and_export_projects(admin_client):
             "version": 0,
             "ocr_bounding_boxes": None,
             "status_id": Any,
+        },
+    )
+
+    assert len(imported_project.publish_configs) == 1
+    _assert_matches(
+        serialize(imported_project.publish_configs[0]),
+        {
+            "id": Any,
+            "project_id": imported_project.id,
+            "text_id": None,
+            "order": 0,
+            "slug": "test-roundtrip-project",
+            "title": "Test Roundtrip Title",
+            "target": None,
+            "author": "Test PC Author",
+            "genre": "kavya",
+            "language": "sa",
+            "parent_slug": None,
         },
     )
 

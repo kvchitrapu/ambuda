@@ -1,7 +1,7 @@
 import createPublishConfig, { titleToSlug } from '@/publish-config';
 
 function setup(overrides = {}) {
-  window.PUBLISH_CONFIG = overrides.config || { publish: [], pages: [] };
+  window.PUBLISH_CONFIG = overrides.configs || [];
   window.PUBLISH_CONFIG_SCHEMA = overrides.schema || {
     properties: {
       title: { type: 'string' },
@@ -42,13 +42,12 @@ afterEach(() => {
 test('init with empty config', () => {
   const c = setup();
   expect(c.config.publish).toEqual([]);
-  expect(c.config.pages).toEqual([]);
   expect(c.fields.length).toBeGreaterThan(0);
 });
 
 test('init loads existing entries', () => {
   const c = setup({
-    config: { publish: [{ slug: 'test', title: 'Test' }], pages: [] },
+    configs: [{ slug: 'test', title: 'Test' }],
   });
   expect(c.config.publish).toHaveLength(1);
   expect(c.config.publish[0].slug).toBe('test');
@@ -108,7 +107,7 @@ test('generateJSON excludes empty optional fields', () => {
   c.config.publish[0].title = 'T';
   c.config.publish[0].slug = 's';
   const json = JSON.parse(c.generateJSON());
-  expect(json.publish[0]).toEqual({ title: 'T', slug: 's' });
+  expect(json[0]).toEqual({ title: 'T', slug: 's' });
 });
 
 test('generateJSON includes non-empty optional fields', () => {
@@ -116,7 +115,7 @@ test('generateJSON includes non-empty optional fields', () => {
   c.addPublishEntry();
   Object.assign(c.config.publish[0], { title: 'T', slug: 's', author: 'A' });
   const json = JSON.parse(c.generateJSON());
-  expect(json.publish[0].author).toBe('A');
+  expect(json[0].author).toBe('A');
 });
 
 test('language picker: filtered returns all when no query', () => {
@@ -377,14 +376,14 @@ test('titleToSlug: M → m before h', () => {
 
 test('isDuplicateSlug: no duplicate returns false', () => {
   const c = setup({
-    config: { publish: [{ slug: 'a', title: 'A' }, { slug: 'b', title: 'B' }], pages: [] },
+    configs: [{ slug: 'a', title: 'A' }, { slug: 'b', title: 'B' }],
   });
   expect(c.isDuplicateSlug(c.config.publish[0])).toBe(false);
 });
 
 test('isDuplicateSlug: same slug on another entry returns true', () => {
   const c = setup({
-    config: { publish: [{ slug: 'a', title: 'A' }, { slug: 'a', title: 'B' }], pages: [] },
+    configs: [{ slug: 'a', title: 'A' }, { slug: 'a', title: 'B' }],
   });
   expect(c.isDuplicateSlug(c.config.publish[0])).toBe(true);
   expect(c.isDuplicateSlug(c.config.publish[1])).toBe(true);
@@ -392,14 +391,14 @@ test('isDuplicateSlug: same slug on another entry returns true', () => {
 
 test('isDuplicateSlug: own slug does not flag itself', () => {
   const c = setup({
-    config: { publish: [{ slug: 'unique', title: 'Only' }], pages: [] },
+    configs: [{ slug: 'unique', title: 'Only' }],
   });
   expect(c.isDuplicateSlug(c.config.publish[0])).toBe(false);
 });
 
 test('isDuplicateSlug: empty slug is not a duplicate', () => {
   const c = setup({
-    config: { publish: [{ slug: '', title: 'A' }, { slug: '', title: 'B' }], pages: [] },
+    configs: [{ slug: '', title: 'A' }, { slug: '', title: 'B' }],
   });
   expect(c.isDuplicateSlug(c.config.publish[0])).toBe(false);
 });
@@ -413,7 +412,7 @@ function mockDropEvent(index) {
 
 test('onDrop reorders entries forward', () => {
   const c = setup({
-    config: { publish: [{ slug: 'a', title: 'A' }, { slug: 'b', title: 'B' }, { slug: 'c', title: 'C' }], pages: [] },
+    configs: [{ slug: 'a', title: 'A' }, { slug: 'b', title: 'B' }, { slug: 'c', title: 'C' }],
   });
   c.dragIndex = 0;
   c.onDrop(mockDropEvent(2));
@@ -422,7 +421,7 @@ test('onDrop reorders entries forward', () => {
 
 test('onDrop reorders entries backward', () => {
   const c = setup({
-    config: { publish: [{ slug: 'a', title: 'A' }, { slug: 'b', title: 'B' }, { slug: 'c', title: 'C' }], pages: [] },
+    configs: [{ slug: 'a', title: 'A' }, { slug: 'b', title: 'B' }, { slug: 'c', title: 'C' }],
   });
   c.dragIndex = 2;
   c.onDrop(mockDropEvent(0));

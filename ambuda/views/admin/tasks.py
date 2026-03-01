@@ -561,7 +561,8 @@ def deserialize(data: dict, model_class):
 def export_projects(model_name, selected_ids: list | None = None):
     session = q.get_session()
     query = session.query(db.Project).options(
-        selectinload(db.Project.pages).selectinload(db.Page.revisions)
+        selectinload(db.Project.pages).selectinload(db.Page.revisions),
+        selectinload(db.Project.publish_configs),
     )
 
     if not selected_ids:
@@ -590,6 +591,11 @@ def export_projects(model_name, selected_ids: list | None = None):
                 page_dict["revisions"].append(revision_dict)
 
             project_dict["pages"].append(page_dict)
+
+        project_dict["publish_configs"] = [
+            serialize(pc, exclude={"id", "project_id", "text_id"})
+            for pc in project.publish_configs
+        ]
 
         export_data["projects"].append(project_dict)
 
@@ -647,6 +653,7 @@ def import_projects(model_name, selected_ids: list | None = None):
         success_count = 0
         for project_data in projects_data:
             pages_data = project_data.pop("pages", [])
+            publish_configs_data = project_data.pop("publish_configs", [])
 
             board = db.Board(title=f"Board for {project_data.get('slug', 'project')}")
             session.add(board)
@@ -679,6 +686,11 @@ def import_projects(model_name, selected_ids: list | None = None):
 
                     revision = deserialize(revision_data, db.Revision)
                     session.add(revision)
+
+            for pc_data in publish_configs_data:
+                pc_data["project_id"] = project.id
+                pc = deserialize(pc_data, db.PublishConfig)
+                session.add(pc)
 
             success_count += 1
 

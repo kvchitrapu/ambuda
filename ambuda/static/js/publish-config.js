@@ -112,7 +112,7 @@ function createPicker(field, component, {
 }
 
 export default () => ({
-  config: { publish: [], pages: [] },
+  config: { publish: [] },
   showJSON: false,
   filterHelpOpen: false,
   fields: [],
@@ -160,7 +160,7 @@ export default () => ({
       }),
     };
     this.generateFieldsFromSchema();
-    this.config = window.PUBLISH_CONFIG;
+    this.config = { publish: window.PUBLISH_CONFIG };
     this.config.publish.forEach((entry) => {
       this.fields.forEach((f) => {
         if (!(f.name in entry)) entry[f.name] = this.getDefaultValue(f);
@@ -356,17 +356,14 @@ export default () => ({
   },
 
   generateJSON() {
-    const cleaned = {
-      publish: this.config.publish.map((entry) => {
-        const clean = {};
-        this.fields.forEach((f) => {
-          const v = entry[f.name];
-          if (f.required || (v !== '' && v !== null && v !== undefined)) clean[f.name] = v;
-        });
-        return clean;
-      }),
-      pages: this.config.pages,
-    };
+    const cleaned = this.config.publish.map((entry) => {
+      const clean = {};
+      this.fields.forEach((f) => {
+        const v = entry[f.name];
+        if (f.required || (v !== '' && v !== null && v !== undefined)) clean[f.name] = v;
+      });
+      return clean;
+    });
     return JSON.stringify(cleaned, null, 2);
   },
 

@@ -21,7 +21,6 @@ from sqlalchemy import select, func
 
 from ambuda import database as db
 from ambuda.consts import SINGLE_SECTION_SLUG
-from ambuda.models.proofing import ProjectConfig
 from ambuda.utils.project_structuring import ProofPage
 from ambuda.utils import project_utils
 from ambuda import queries as q
@@ -282,17 +281,14 @@ def find_uncovered_blocks(project: db.Project) -> list[UncoveredBlock]:
     (Skips 'ignore' and 'metadata' blocks.)
     """
 
-    try:
-        config = ProjectConfig.model_validate_json(project.config or "{}")
-    except Exception:
-        config = ProjectConfig()
+    publish_configs = sorted(project.publish_configs, key=lambda c: c.order)
 
-    if not config.publish:
+    if not publish_configs:
         return []
 
     # Build filters from all publish configs
     filters: list[Filter] = []
-    for pc in config.publish:
+    for pc in publish_configs:
         target = pc.target or ""
         try:
             if target.startswith("("):
@@ -708,8 +704,11 @@ def _rewrite_project_to_tei_xml(
         block_filter = Filter(f"(label {target})")
     img_range = block_filter.image_range()
 
+    page_statuses = Counter()
+
     def _iter_blocks(revisions) -> Iterable[IndexedBlock]:
         """Iterate over all blocks in the given revisions."""
+        nonlocal page_statuses
         for revision in revisions:
             image_number = page_id_to_image_number.get(revision.page_id)
             if image_number is None:
@@ -720,6 +719,7 @@ def _rewrite_project_to_tei_xml(
                 continue
 
             page_text = revision.content
+            page_statuses[revision.status.name] += 1
             try:
                 page_xml = _safe_fromstring(page_text)
             except etree.XMLSyntaxError:

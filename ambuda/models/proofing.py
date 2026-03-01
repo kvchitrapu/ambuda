@@ -3,8 +3,7 @@
 import uuid
 from datetime import datetime, UTC
 from enum import StrEnum
-from pydantic import BaseModel, Field
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, JSON, String, Table, event
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Table, event
 from sqlalchemy import Text as Text_
 from sqlalchemy.orm import relationship, Mapped, mapped_column
 
@@ -94,19 +93,29 @@ _LANGUAGE_LABELS: dict[str, str] = {
 }
 
 
-class PublishConfig(BaseModel):
-    slug: str
-    title: str
-    target: str | None = None
-    author: str | None = None
-    genre: str | None = None
-    language: LanguageCode = LanguageCode.SA
-    parent_slug: str | None = None
+class PublishConfig(Base):
+    """A publish configuration for a proofing project.
 
+    Each config describes how to publish one text from a project's pages.
+    """
 
-class ProjectConfig(BaseModel):
-    publish: list[PublishConfig] = Field(default_factory=list)
-    pages: list[str] = Field(default_factory=list)
+    __tablename__ = "publish_configs"
+
+    id = pk()
+    project_id = foreign_key("proof_projects.id")
+    text_id = Column(Integer, ForeignKey("texts.id"), nullable=True, index=True)
+    order = Column(Integer, nullable=False)
+
+    slug: Mapped[str] = mapped_column(String, nullable=False)
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    target: Mapped[str | None] = mapped_column(String, nullable=True)
+    author: Mapped[str | None] = mapped_column(String, nullable=True)
+    genre: Mapped[str | None] = mapped_column(String, nullable=True)
+    language: Mapped[str] = mapped_column(String, nullable=False, default="sa")
+    parent_slug: Mapped[str | None] = mapped_column(String, nullable=True)
+
+    project = relationship("Project", backref="publish_configs")
+    text = relationship("Text")
 
 
 class ProjectStatus(StrEnum):
@@ -168,9 +177,6 @@ class Project(Base):
     notes = text()
     #: Defines page numbers (e.g. "x", "vii", ...)
     page_numbers = text()
-    #: Additional metadata for this project as a JSON document.
-    #: The schema is defined in `ProjectConfig`.
-    config = Column(JSON, nullable=True)
     #: The status of this project.
     status: Mapped[str] = mapped_column(
         String, nullable=False, default=ProjectStatus.PENDING
@@ -246,16 +252,6 @@ class ProjectSource(Base):
 
     project = relationship("Project", back_populates="sources")
     author = relationship("User")
-
-
-@event.listens_for(Project, "before_insert")
-@event.listens_for(Project, "before_update")
-def validate_config(mapper, connection, project):
-    if project.config:
-        try:
-            ProjectConfig.model_validate_json(project.config)
-        except Exception as e:
-            raise ValueError(f"Project.config must be a valid JSON document: {e}")
 
 
 @event.listens_for(Project, "before_insert")
