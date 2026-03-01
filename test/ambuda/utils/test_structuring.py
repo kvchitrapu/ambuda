@@ -137,10 +137,9 @@ def test_from_content_and_page_id():
     assert s.ProofPage.from_content_and_page_id(text, 0) == P(
         id=0,
         blocks=[
-            B(type="p", content="अ", lang="sa"),
-            B(type="p", content="क<error></error><fix>ख</fix>ग", lang="sa"),
-            B(type="verse", content="अ ।\nक ॥", lang="sa"),
-            B(type="footnote", content="क", lang="sa", mark="1"),
+            B(type="p", content="अ\nक<error></error><fix>ख</fix>ग"),
+            B(type="verse", content="अ ।\nक ॥"),
+            B(type="p", content="[^1] क"),
         ],
     )
 
