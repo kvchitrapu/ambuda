@@ -122,45 +122,7 @@ class ProofPage:
         if not text:
             return ProofPage(blocks=[], id=page_id)
 
-        lines = [x.strip() for x in text.splitlines()]
-        text_blocks = []
-        cur = []
-        for line in lines:
-            if line:
-                cur.append(line)
-            else:
-                if cur:
-                    text_blocks.append("\n".join(cur))
-                    cur = []
-        if cur:
-            text_blocks.append("\n".join(cur))
-
-        blocks = []
-        for content in text_blocks:
-            language = detect_language(content)
-
-            mark = None
-            # Legacy footnote
-            if content.startswith("[^"):
-                block_type = "footnote"
-                if m := re.match(r"^\[\^([^\]]+)\]\s*", content):
-                    mark = m.group(1)
-                    content = content[m.end() :]
-            elif language == "sa" and _is_verse(content):
-                block_type = "verse"
-            else:
-                block_type = "p"
-
-            blocks.append(
-                ProofBlock(
-                    type=block_type,
-                    content=content,
-                    lang=language,
-                    n=None,
-                    text=None,
-                    mark=mark,
-                )
-            )
+        blocks = split_plain_text_to_blocks(text)
         return ProofPage(id=page_id, blocks=blocks)
 
     def to_xml_string(self) -> str:

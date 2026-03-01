@@ -2,16 +2,18 @@ from lxml import etree
 import pytest
 
 from ambuda import database as db
+from ambuda.enums import SitePageStatus
 from ambuda.utils import text_publishing as s
 
 
-# Filtering
+# Utilities
 # -------------------------------------------------------------------
 
 
 def _make_block(image_number, block_index, page_xml_str):
     page_xml = etree.fromstring(page_xml_str)
-    revision = db.Revision(id=1, page_id=1, content=page_xml_str)
+    page_status = db.PageStatus(name=SitePageStatus.R1)
+    revision = db.Revision(id=1, page_id=1, content=page_xml_str, status=page_status)
     return s.IndexedBlock(
         revision=revision,
         image_number=image_number,
@@ -180,8 +182,78 @@ def test_filter_matches__image_label_picks_first():
     assert not f.matches(_make_block(3, 2, page))
 
 
+def test_n_counter():
+    ns = s.NCounter()
+
+    # Basic usage
+    assert ns.next("p") == "p1"
+    assert ns.next("p") == "p2"
+    assert ns.next("lg") == "lg1"
+
+    # Override
+    ns.override("p", "1.5")
+    assert ns.next("p") == "1.6"
+    assert ns.next("lg") == "lg2"
+
+    # Override, non-numeric
+    ns.override("head", "head")
+    assert ns.next("head") == "head2"
+
+    # Set prefix
+    ns.set_prefix("2")
+    assert ns.next("p") == "2.p1"
+    assert ns.next("lg") == "2.lg1"
+
+
+def test_n_counter__maybe_assign_n():
+    ns = s.NCounter()
+
+    note_xml = s._safe_fromstring("<note>a</note>")
+    ns.maybe_assign_n("1", note_xml)
+    assert "n" not in note_xml
+
+    sp_xml = s._safe_fromstring("<sp>a</sp>")
+    ns.maybe_assign_n("1", sp_xml)
+    assert "n" not in sp_xml
+
+    speaker_xml = s._safe_fromstring("<speaker>a</speaker>")
+    ns.maybe_assign_n("1", speaker_xml)
+    assert "n" not in speaker_xml
+
+    p_xml = s._safe_fromstring("<p>a</p>")
+    ns.maybe_assign_n("1", p_xml)
+    assert p_xml.attrib["n"] == "1"
+
+    p_xml_2 = s._safe_fromstring("<p>a</p>")
+    ns.maybe_assign_n(None, p_xml_2)
+    assert p_xml_2.attrib["n"] == "2"
+
+    # TODO: maybe_assign_n with "sp"
+
+
 # Block-level rewriting
 # -------------------------------------------------------------------
+
+
+def _assert_rewrite_block(input, expected):
+    xml = etree.fromstring(input)
+    s._rewrite_block_to_tei_xml(xml, 42)
+    actual = s._to_string(xml)
+    assert expected == actual
+
+
+@pytest.mark.parametrize(
+    "input,expected",
+    [
+        # `n` is preserved
+        ('<p n="3">foo</p>', '<p n="3">foo</p>'),
+        ('<verse n="3">foo</verse>', '<lg n="3"><l>foo</l></lg>'),
+        ('<heading n="3">foo</heading>', '<head n="3">foo</head>'),
+        ('<trailer n="3">foo</trailer>', '<trailer n="3">foo</trailer>'),
+    ],
+)
+def test_rewrite_block_to_tei_xml__n_is_preserved(input, expected):
+    _assert_rewrite_block(input, expected)
 
 
 @pytest.mark.parametrize(
@@ -189,11 +261,6 @@ def test_filter_matches__image_label_picks_first():
     [
         # Basic usage
         ("<p>foo</p>", "<p>foo</p>"),
-        ("<heading>foo</heading>", "<head>foo</head>"),
-        ("<title>foo</title>", "<title>foo</title>"),
-        ("<trailer>foo</trailer>", "<trailer>foo</trailer>"),
-        # Other block types do not have a spec, so skip them for now.
-        # <p>
         # <p> joins together text spread across multiple lines.
         ("<p>foo \nbar</p>", "<p>foo bar</p>"),
         ("<p>foo\nbar</p>", "<p>foo bar</p>"),
@@ -203,9 +270,18 @@ def test_filter_matches__image_label_picks_first():
         ("<p>foo-bar\nbiz</p>", "<p>foo-bar biz</p>"),
         # <p> should respect and retain inline marks when joining text.
         ("<p><fix>foo</fix> \n bar</p>", "<p><supplied>foo</supplied> bar</p>"),
-        # <lg>
-        # <lg> breaks down lines (separated by whitespace) into separate <l> elements.
+    ],
+)
+def test_rewrite_block_to_tei_xml__p(input, expected):
+    _assert_rewrite_block(input, expected)
+
+
+@pytest.mark.parametrize(
+    "input,expected",
+    [
+        # Basic usage
         ("<verse>foo</verse>", "<lg><l>foo</l></lg>"),
+        # <lg> breaks down lines (separated by whitespace) into separate <l> elements.
         ("<verse>foo\nbar</verse>", "<lg><l>foo</l><l>bar</l></lg>"),
         ("<verse>foo\nbar\nbiz</verse>", "<lg><l>foo</l><l>bar</l><l>biz</l></lg>"),
         # <lg> should respect and retain inline marks when splitting lines.
@@ -223,6 +299,209 @@ def test_filter_matches__image_label_picks_first():
             "<verse>f<fix>oo</fix> \n bar</verse>",
             "<lg><l>f<supplied>oo</supplied></l><l>bar</l></lg>",
         ),
+    ],
+)
+def test_rewrite_block_to_tei_xml__verse(input, expected):
+    _assert_rewrite_block(input, expected)
+
+
+@pytest.mark.parametrize(
+    "input,expected",
+    [
+        ("<verse>a ॥ 1 ॥</verse>", "<lg><l>a ॥ 1 ॥</l></lg>"),
+        ("<verse>a॥1॥</verse>", "<lg><l>a ॥ 1 ॥</l></lg>"),
+        ("<verse>a ॥ 1   ॥  </verse>", "<lg><l>a ॥ 1 ॥</l></lg>"),
+    ],
+)
+def test_rewrite_block_to_tei_xml__verse__normalize_double_dandas(input, expected):
+    _assert_rewrite_block(input, expected)
+
+
+@pytest.mark.parametrize(
+    "input,expected",
+    [
+        ("<heading>foo</heading>", "<head>foo</head>"),
+        # Whitespace
+        ("<heading>  foo </heading>", "<head>foo</head>"),
+        # Whitespace with child elements
+        ("<heading>  foo <b>bar</b> </heading>", "<head>foo <b>bar</b></head>"),
+    ],
+)
+def test_rewrite_block_to_tei_xml__heading(input, expected):
+    _assert_rewrite_block(input, expected)
+
+
+@pytest.mark.parametrize(
+    "input,expected",
+    [
+        ("<title>foo</title>", "<title>foo</title>"),
+        # Whitespace
+        ("<title> foo </title>", "<title>foo</title>"),
+        # Whitespace with child elements
+        ("<title>  foo <b>bar</b> </title>", "<title>foo <b>bar</b></title>"),
+    ],
+)
+def test_rewrite_block_to_tei_xml__title(input, expected):
+    _assert_rewrite_block(input, expected)
+
+
+@pytest.mark.parametrize(
+    "input,expected",
+    [
+        ("<subtitle>foo</subtitle>", '<title type="sub">foo</title>'),
+        # Whitespace
+        ("<subtitle> foo </subtitle>", '<title type="sub">foo</title>'),
+        # Whitespace with child elements
+        (
+            "<subtitle>  foo <b>bar</b> </subtitle>",
+            '<title type="sub">foo <b>bar</b></title>',
+        ),
+    ],
+)
+def test_rewrite_block_to_tei_xml__subtitle(input, expected):
+    _assert_rewrite_block(input, expected)
+
+
+@pytest.mark.parametrize(
+    "input,expected",
+    [
+        ("<trailer>foo</trailer>", "<trailer>foo</trailer>"),
+        # Whitespace
+        ("<trailer> foo </trailer>", "<trailer>foo</trailer>"),
+        # Whitespace with child elements
+        ("<trailer>  foo <b>bar</b> </trailer>", "<trailer>foo <b>bar</b></trailer>"),
+    ],
+)
+def test_rewrite_block_to_tei_xml__trailer(input, expected):
+    _assert_rewrite_block(input, expected)
+
+
+@pytest.mark.parametrize(
+    "input,expected",
+    [
+        ("<footnote>foo</footnote>", '<note type="footnote">foo</note>'),
+        # TODO: first token "1", "(ka)", etc.
+    ],
+)
+def test_rewrite_block_to_tei_xml__trailer(input, expected):
+    _assert_rewrite_block(input, expected)
+
+
+@pytest.mark.parametrize(
+    "input,expected",
+    [
+        # <speaker> converts the block type to <sp>. <speaker> is yanked out of the block into <sp>,
+        # preserving element order. The old block type is appended as a child to <sp>.
+        ("<p><speaker>foo</speaker></p>", "<sp><speaker>foo</speaker></sp>"),
+        (
+            "<p><speaker>foo</speaker>bar-\nbiz</p>",
+            "<sp><speaker>foo</speaker><p>barbiz</p></sp>",
+        ),
+        # Speaker without content
+        ("<p><speaker>foo</speaker></p>", "<sp><speaker>foo</speaker></sp>"),
+        # Speaker without content + with whitespace
+        ("<p> <speaker>foo</speaker> </p>", "<sp><speaker>foo</speaker></sp>"),
+        # Speaker with <p> content
+        (
+            "<p><speaker>foo</speaker> bar</p>",
+            "<sp><speaker>foo</speaker><p>bar</p></sp>",
+        ),
+        # Speaker with <lg> content
+        (
+            "<verse><speaker>foo</speaker> bar</verse>",
+            "<sp><speaker>foo</speaker><lg><l>bar</l></lg></sp>",
+        ),
+    ],
+)
+def test_rewrite_block_to_tei_xml__tei_sp(input, expected):
+    _assert_rewrite_block(input, expected)
+
+
+@pytest.mark.parametrize(
+    "input,expected",
+    [
+        # Default
+        ("<p><stage>foo</stage></p>", "<p><stage>foo</stage></p>"),
+        # Whitespace is stripped
+        ("<p><stage> foo </stage></p>", "<p><stage>foo</stage></p>"),
+        # Parens moved to `rend`
+        ("<p><stage>(foo)</stage></p>", '<p><stage rend="parentheses">foo</stage></p>'),
+        # Parens moved to `rend` + whitespace
+        (
+            "<p><stage> ( foo ) </stage></p>",
+            '<p><stage rend="parentheses">foo</stage></p>',
+        ),
+        # Space is inserted before a following element
+        ("<p><stage>foo</stage>bar</p>", "<p><stage>foo</stage> bar</p>"),
+    ],
+)
+def test_rewrite_block_to_tei_xml__stage(input, expected):
+    _assert_rewrite_block(input, expected)
+
+
+@pytest.mark.parametrize(
+    "input,expected",
+    [
+        # Default
+        ("<p><speaker>foo</speaker></p>", "<sp><speaker>foo</speaker></sp>"),
+        # Dashes are stripped
+        (
+            "<p><speaker>foo - </speaker></p>",
+            '<sp><speaker rend="dash">foo</speaker></sp>',
+        ),
+        # Dashes and whitespace are stripped
+        (
+            "<p><speaker> foo -– </speaker></p>",
+            '<sp><speaker rend="dash">foo</speaker></sp>',
+        ),
+    ],
+)
+def test_rewrite_block_to_tei_xml__speaker(input, expected):
+    _assert_rewrite_block(input, expected)
+
+
+@pytest.mark.parametrize(
+    "input,expected",
+    [
+        # Default case
+        (
+            "<p>aoeu<chaya>asdf</chaya></p>",
+            '<p><choice type="chaya"><seg xml:lang="pra">aoeu</seg><seg xml:lang="sa">asdf</seg></choice></p>',
+        ),
+        # Child elements are moved properly
+        (
+            "<p>aoeu<x>foo</x><chaya>asdf<y>bar</y></chaya></p>",
+            '<p><choice type="chaya"><seg xml:lang="pra">aoeu<x>foo</x></seg><seg xml:lang="sa">asdf<y>bar</y></seg></choice></p>',
+        ),
+        # rend - no brackets
+        (
+            "<p><chaya>foo</chaya></p>",
+            '<p><choice type="chaya"><seg xml:lang="pra" /><seg xml:lang="sa">foo</seg></choice></p>',
+        ),
+        # rend - whitespace
+        (
+            "<p><chaya> foo </chaya></p>",
+            '<p><choice type="chaya"><seg xml:lang="pra" /><seg xml:lang="sa">foo</seg></choice></p>',
+        ),
+        # rend - brackets
+        (
+            "<p><chaya>[foo]</chaya></p>",
+            '<p><choice type="chaya"><seg xml:lang="pra" /><seg xml:lang="sa" rend="brackets">foo</seg></choice></p>',
+        ),
+        # rend - brackets and whitespace
+        (
+            "<p><chaya> [ foo ] </chaya></p>",
+            '<p><choice type="chaya"><seg xml:lang="pra" /><seg xml:lang="sa" rend="brackets">foo</seg></choice></p>',
+        ),
+    ],
+)
+def test_rewrite_block_to_tei_xml__chaya(input, expected):
+    _assert_rewrite_block(input, expected)
+
+
+@pytest.mark.parametrize(
+    "input,expected",
+    [
         # TODO: too hard
         # ("<verse>f<fix>oo\nbar</fix> biz</verse>", "<lg><l>f<supplied>oo</supplied></l><l><supplied>bar</supplied> biz</l></lg>"),
         # <error> and <fix>
@@ -248,89 +527,72 @@ def test_filter_matches__image_label_picks_first():
             "<p>foo<error>bar</error> biz <fix>baf</fix> tail</p>",
             "<p>foo<choice><sic>bar</sic><corr /></choice> biz <supplied>baf</supplied> tail</p>",
         ),
-        # <chaya>
-        (
-            "<p>aoeu<x>foo</x><chaya>asdf<y>bar</y></chaya></p>",
-            '<p><choice type="chaya"><seg xml:lang="pra">aoeu<x>foo</x></seg><seg xml:lang="sa">asdf<y>bar</y></seg></choice></p>',
-        ),
-        # <speaker> converts the block type to <sp>. <speaker> is yanked out of the block into <sp>,
-        # preserving element order. The old block type is appended as a child to <sp>.
-        ("<p><speaker>foo</speaker></p>", "<sp><speaker>foo</speaker></sp>"),
-        (
-            "<p><speaker>foo</speaker>bar-\nbiz</p>",
-            "<sp><speaker>foo</speaker><p>barbiz</p></sp>",
-        ),
+    ],
+)
+def test_rewrite_block_to_tei_xml__error_and_fix(input, expected):
+    _assert_rewrite_block(input, expected)
+
+
+@pytest.mark.parametrize(
+    "input,expected",
+    [
         # <flag> --> <unclear>
         ("<p><flag>foo</flag></p>", "<p><unclear>foo</unclear></p>"),
-        # No content --> don't preserve the <p>.
-        ("<p> <speaker>foo</speaker> </p>", "<sp><speaker>foo</speaker></sp>"),
-        (
-            "<verse><speaker>foo</speaker>bar</verse>",
-            "<sp><speaker>foo</speaker><lg><l>bar</l></lg></sp>",
-        ),
     ],
 )
-def test_rewrite_block_to_tei_xml(input, expected):
-    xml = etree.fromstring(input)
-    s._rewrite_block_to_tei_xml(xml, 42)
-    actual = s._to_string(xml)
-    assert expected == actual
+def test_rewrite_block_to_tei_xml__flag(input, expected):
+    _assert_rewrite_block(input, expected)
 
 
 @pytest.mark.parametrize(
-    "input,expected",
+    "first,second,expected",
     [
-        ("<p><speaker>foo</speaker></p>", "<sp><speaker>foo</speaker></sp>"),
-        ("<p><speaker>foo - </speaker></p>", "<sp><speaker>foo</speaker></sp>"),
-        ("<p><speaker> foo -– </speaker></p>", "<sp><speaker>foo</speaker></sp>"),
-    ],
-)
-def test_rewrite_block_to_tei_xml__speaker(input, expected):
-    xml = etree.fromstring(input)
-    s._rewrite_block_to_tei_xml(xml, 42)
-    actual = s._to_string(xml)
-    assert expected == actual
-
-
-@pytest.mark.parametrize(
-    "input,expected",
-    [
-        ("<p><stage>foo</stage></p>", "<p><stage>foo</stage></p>"),
-        ("<p><stage>(foo)</stage></p>", '<p><stage rend="parentheses">foo</stage></p>'),
+        # Simple <p>
+        ("<p>foo</p>", "<p>bar</p>", '<p>foo<pb n="42" />bar</p>'),
+        # Simple <lg>
         (
-            "<p><stage> ( foo ) </stage></p>",
-            '<p><stage rend="parentheses">foo</stage></p>',
+            "<lg><l>foo</l></lg>",
+            "<lg><l>bar</l></lg>",
+            '<lg><l>foo</l><pb n="42" /><l>bar</l></lg>',
         ),
-    ],
-)
-def test_rewrite_block_to_tei_xml__stage(input, expected):
-    xml = etree.fromstring(input)
-    s._rewrite_block_to_tei_xml(xml, 42)
-    actual = s._to_string(xml)
-    assert expected == actual
-
-
-@pytest.mark.parametrize(
-    "input,expected",
-    [
+        # <p> with children
         (
-            "<p><chaya>foo</chaya></p>",
-            '<p><choice type="chaya"><seg xml:lang="pra" /><seg xml:lang="sa">foo</seg></choice></p>',
+            "<p>foo <a>A</a></p>",
+            "<p>bar <b>B</b></p>",
+            '<p>foo <a>A</a><pb n="42" />bar <b>B</b></p>',
         ),
+        # <lg> with children
         (
-            "<p><chaya>[foo]</chaya></p>",
-            '<p><choice type="chaya"><seg xml:lang="pra" /><seg xml:lang="sa" rend="brackets">foo</seg></choice></p>',
+            "<lg><l>foo <a>A</a></l></lg>",
+            "<lg><l>bar <b>B</b></l></lg>",
+            '<lg><l>foo <a>A</a></l><pb n="42" /><l>bar <b>B</b></l></lg>',
         ),
+        # Simple <sp> with child <p>
         (
-            "<p><chaya> [ foo ] </chaya></p>",
-            '<p><choice type="chaya"><seg xml:lang="pra" /><seg xml:lang="sa" rend="brackets">foo</seg></choice></p>',
+            "<sp><speaker>hi</speaker><p>foo</p></sp>",
+            "<p>bar</p>",
+            '<sp><speaker>hi</speaker><p>foo<pb n="42" />bar</p></sp>',
+        ),
+        # Simple <sp> with child <lg>
+        (
+            "<sp><speaker>hi</speaker><lg><l>foo</l></lg></sp>",
+            "<lg><l>bar</l></lg>",
+            '<sp><speaker>hi</speaker><lg><l>foo</l><pb n="42" /><l>bar</l></lg></sp>',
+        ),
+        # Simple <sp> with multiple child <p> -- append to latest
+        (
+            "<sp><speaker>hi</speaker><p>blah</p><p>foo</p></sp>",
+            "<p>bar</p>",
+            '<sp><speaker>hi</speaker><p>blah</p><p>foo<pb n="42" />bar</p></sp>',
         ),
     ],
 )
-def test_rewrite_block_to_tei_xml__chaya(input, expected):
-    xml = etree.fromstring(input)
-    s._rewrite_block_to_tei_xml(xml, 42)
-    actual = s._to_string(xml)
+def test_concatenate_tei_xml_blocks_across_page_boundary(first, second, expected):
+    _first = etree.fromstring(first)
+    _second = etree.fromstring(second)
+
+    actual = s._concatenate_tei_xml_blocks_across_page_boundary(_first, _second, "42")
+    actual = s._to_string(_first)
     assert expected == actual
 
 
@@ -395,13 +657,13 @@ def test_create_tei_document__break_in_verse():
         ["<page><verse>line1\nline2<break/>line3\nline4</verse></page>"],
         [
             s.TEIBlock(
-                xml='<lg n="lg1"><l>line1</l><l>line2</l></lg>',
-                slug="lg1",
+                xml='<lg n="1"><l>line1</l><l>line2</l></lg>',
+                slug="1",
                 page_id=0,
             ),
             s.TEIBlock(
-                xml='<lg n="lg2"><l>line3</l><l>line4</l></lg>',
-                slug="lg2",
+                xml='<lg n="2"><l>line3</l><l>line4</l></lg>',
+                slug="2",
                 page_id=0,
             ),
         ],
@@ -433,10 +695,12 @@ def test_create_tei_document__no_break_backward_compatible():
 
 def _test_create_tei_document(input, expected):
     """Helper function for testing create_tei_document."""
+    page_status = db.PageStatus(name=SitePageStatus.R1)
+
     pages = []
     revisions = []
     for i, page_xml in enumerate(input):
-        revision = db.Revision(id=i, page_id=i, content=page_xml)
+        revision = db.Revision(id=i, page_id=i, content=page_xml, status=page_status)
         revisions.append(revision)
         pages.append(
             db.Page(id=i, slug=str(i), order=i, status_id=1, revisions=[revision])
@@ -449,6 +713,78 @@ def _test_create_tei_document(input, expected):
 
     conversion = s.create_tei_document(project, config, revisions=revisions)
     assert conversion.items == expected
+
+
+@pytest.mark.parametrize(
+    "input,expected",
+    [
+        # Single <head>
+        (
+            ["<page><head>foo</head></page>"],
+            [s.TEIBlock(xml='<head n="head">foo</head>', slug="head", page_id=0)],
+        ),
+        # Single <trailer>
+        (
+            ["<page><trailer>foo</trailer></page>"],
+            [
+                s.TEIBlock(
+                    xml='<trailer n="trailer">foo</trailer>', slug="trailer", page_id=0
+                )
+            ],
+        ),
+        # Multiple <head>
+        (
+            ["<page><head>foo</head><head>bar</head></page>"],
+            [
+                s.TEIBlock(xml='<head n="head1">foo</head>', slug="head1", page_id=0),
+                s.TEIBlock(xml='<head n="head2">foo</head>', slug="head2", page_id=0),
+            ],
+        ),
+        # Multiple <trailer>
+        (
+            ["<page><trailer>foo</trailer></page>"],
+            [
+                s.TEIBlock(
+                    xml='<trailer n="trailer1">foo</trailer>',
+                    slug="trailer1",
+                    page_id=0,
+                ),
+                s.TEIBlock(
+                    xml='<trailer n="trailer2">foo</trailer>',
+                    slug="trailer2",
+                    page_id=0,
+                ),
+            ],
+        ),
+    ],
+)
+def _test_create_tei_document__rewrite_head_trailer(input, expected):
+    _test_create_tei_document(input, expected)
+
+
+@pytest.mark.parametrize(
+    "input,expected",
+    [
+        (
+            ["<page><verse>a</verse><verse>b</verse></page>"],
+            [
+                s.TEIBlock(xml="<lg><l>a</l></lg>", slug="1", page_id=0),
+                s.TEIBlock(xml="<lg><l>b</l></lg>", slug="2", page_id=0),
+            ],
+        ),
+        (
+            [
+                "<page><metadata>div.n = 1</metadata><verse>a</verse><verse>b</verse></page>"
+            ],
+            [
+                s.TEIBlock(xml="<lg><l>a</l></lg>", slug="1.1", page_id=0),
+                s.TEIBlock(xml="<lg><l>b</l></lg>", slug="1.2", page_id=0),
+            ],
+        ),
+    ],
+)
+def _test_create_tei_document__rewrite_lg_n_attrib(input, expected):
+    _test_create_tei_document(input, expected)
 
 
 def test_create_tei_document__page_order_differs_from_page_id():
@@ -464,9 +800,17 @@ def test_create_tei_document__page_order_differs_from_page_id():
 
     Before the fix, enumerate gave r(pid=10) image_number=1, selecting "a".
     """
-    r0 = db.Revision(id=0, page_id=10, content='<page><p n="1">a</p></page>')
-    r1 = db.Revision(id=1, page_id=20, content='<page><p n="2">b</p></page>')
-    r2 = db.Revision(id=2, page_id=30, content='<page><p n="3">c</p></page>')
+    page_status = db.PageStatus(name=SitePageStatus.R1)
+
+    r0 = db.Revision(
+        id=0, page_id=10, content='<page><p n="1">a</p></page>', status=page_status
+    )
+    r1 = db.Revision(
+        id=1, page_id=20, content='<page><p n="2">b</p></page>', status=page_status
+    )
+    r2 = db.Revision(
+        id=2, page_id=30, content='<page><p n="3">c</p></page>', status=page_status
+    )
 
     pages = [
         db.Page(id=20, slug="2", order=0, status_id=1, revisions=[r1]),
@@ -497,8 +841,14 @@ def test_create_tei_document__pages_without_revisions_do_not_shift_image_numbers
     Page 2 (image 2) has no revision and should be skipped without
     shifting page 3 from image 3 to image 2.
     """
-    r0 = db.Revision(id=0, page_id=0, content='<page><p n="1">a</p></page>')
-    r2 = db.Revision(id=2, page_id=2, content='<page><p n="2">c</p></page>')
+    page_status = db.PageStatus(name=SitePageStatus.R1)
+
+    r0 = db.Revision(
+        id=0, page_id=0, content='<page><p n="1">a</p></page>', status=page_status
+    )
+    r2 = db.Revision(
+        id=2, page_id=2, content='<page><p n="2">c</p></page>', status=page_status
+    )
 
     pages = [
         db.Page(id=0, slug="1", order=0, status_id=1, revisions=[r0]),
@@ -658,14 +1008,9 @@ def test_create_tei_document__autoincrement_with_dot_prefix():
     _test_create_tei_document(
         ['<page><p n="1.1">a</p><p>b</p><p>c</p></page>'],
         [
-            s.TEISection(
-                slug="1",
-                blocks=[
-                    s.TEIBlock(xml='<p n="1.1">a</p>', slug="1.1", page_id=0),
-                    s.TEIBlock(xml='<p n="1.2">b</p>', slug="1.2", page_id=0),
-                    s.TEIBlock(xml='<p n="1.3">c</p>', slug="1.3", page_id=0),
-                ],
-            )
+            s.TEIBlock(xml='<p n="1.1">a</p>', slug="1.1", page_id=0),
+            s.TEIBlock(xml='<p n="1.2">b</p>', slug="1.2", page_id=0),
+            s.TEIBlock(xml='<p n="1.3">c</p>', slug="1.3", page_id=0),
         ],
     )
 

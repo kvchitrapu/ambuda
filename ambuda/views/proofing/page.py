@@ -164,6 +164,7 @@ def _get_page_data_dict(ctx: PageContext, project: db.Project) -> dict:
         "prevSlug": ctx.prev.slug if ctx.prev else None,
         "nextSlug": ctx.next.slug if ctx.next else None,
         "pageNumber": _get_page_number(project, cur),
+        "imageNumber": cur.order,
         "numPages": ctx.num_pages,
         "status": status,
         "version": cur.version,

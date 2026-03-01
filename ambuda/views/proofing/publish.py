@@ -574,7 +574,7 @@ def create(project_slug, text_slug):
         # Create/update new blocks as necessary.
         #
         # NOTE: this must be done very carefully to avoid thrash during updates.
-        existing_section_slugs = {s.slug for s in text.sections}
+        existing_section_slugs: set[str] = {s.slug for s in text.sections}
         doc_sections = [s for s in document_data.items if isinstance(s, TEISection)]
         if not doc_sections:
             # For texts without section,s create "all" section to hold all blocks
@@ -587,7 +587,7 @@ def create(project_slug, text_slug):
         doc_section_slugs = {s.slug for s in doc_sections}
         section_map = {s.slug: s for s in text.sections}
 
-        if existing_section_slugs != doc_sections:
+        if existing_section_slugs != doc_section_slugs:
             new_sections = doc_section_slugs - existing_section_slugs
             old_sections = existing_section_slugs - doc_section_slugs
 

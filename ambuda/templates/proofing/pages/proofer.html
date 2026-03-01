@@ -316,7 +316,10 @@
           <a class="block font-bold hover:underline" href="{{ url_for("proofing.project.summary", slug=project.slug) }}">
             {{ project.display_title }}
           </a>
-          <div class="text-slate-600 text-xs">Page <span x-text="pageState.pageNumber"></span> of <span x-text="pageState.numPages"></span></div>
+          <div class="text-slate-600 text-xs">
+            Page <span x-text="pageState.pageNumber"></span>
+            (image <span x-text="pageState.imageNumber"></span> of <span x-text="pageState.numPages"></span>)
+          </div>
         </div>
       </div>
 

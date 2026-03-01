@@ -1,4 +1,12 @@
-"""Converts a proofread project into a published text."""
+"""Converts a proofread project into a published text.
+
+Structuring has four phases:
+
+1. Select the project blocks that we want to assemble into a text.
+2. Convert project XML to TEI XML, combining blocks if necessary.
+3. Resolve block numbers, footnotes, and other references.
+4. Write to disk, using the project as a source of metadata.
+"""
 
 import copy
 import dataclasses as dc
@@ -13,6 +21,7 @@ from sqlalchemy import select, func
 
 from ambuda import database as db
 from ambuda.consts import SINGLE_SECTION_SLUG
+from ambuda.models.proofing import ProjectConfig
 from ambuda.utils.project_structuring import ProofPage
 from ambuda.utils import project_utils
 from ambuda import queries as q
@@ -24,24 +33,12 @@ from ambuda.utils.xml_validation import (
 )
 
 
+# Placeholder for <pb> elements where the page number can't be resolved.
 DEFAULT_PRINT_PAGE_NUMBER = "-"
-
+# Default XML namespace
 _XML_NS = "http://www.w3.org/XML/1998/namespace"
+# lxml parser with basic security protections (XXE, billion-laughs)
 _SAFE_PARSER = etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=False)
-
-
-def _safe_fromstring(text: str | bytes) -> etree._Element:
-    """Parse an XML string using a parser that rejects entity expansion and
-    network access (protects against XXE and billion-laughs attacks)."""
-    if isinstance(text, str):
-        text = text.encode("utf-8")
-    return etree.fromstring(text, _SAFE_PARSER)
-
-
-def _to_string(el: etree._Element) -> str:
-    """Serialize an element to a Unicode string with readable self-closing tags."""
-    s = etree.tostring(el, encoding="unicode")
-    return re.sub(r"(?<! )/>", " />", s)
 
 
 @dc.dataclass
@@ -50,7 +47,7 @@ class IndexedBlock:
 
     # The revision this block comes from.
     revision: db.Revision
-    # 1-indexed image number (for page numbers)
+    # 1-indexed image number (for resolving page numbers)
     image_number: int
     # 0-indexed block index within the page
     block_index: int
@@ -77,7 +74,7 @@ class TEISection:
 
 @dc.dataclass
 class TEIDocument:
-    """A TEI document (publication-ready)."""
+    """A parsed TEI document (publication-ready)."""
 
     #: The TEI header as an XML blob with namespaces stripped.
     header: str
@@ -86,12 +83,27 @@ class TEIDocument:
 
 
 @dc.dataclass
-class TEIConversion:
+class TEIRewrite:
     # A mix of sections and blocks.
     items: list[TEISection | TEIBlock]
     errors: list[str]
     # Histogram of page statuses
     page_statuses: Counter
+
+
+def _safe_fromstring(text: str | bytes) -> etree._Element:
+    """Parse an XML string safely."""
+    if isinstance(text, str):
+        text = text.encode("utf-8")
+    return etree.fromstring(text, _SAFE_PARSER)
+
+
+def _to_string(el: etree._Element) -> str:
+    """Serialize an element to a Unicode string with readable self-closing tags."""
+    s = etree.tostring(el, encoding="unicode")
+    # I tried getting lxml to output this directly but didn't succeed.
+    # This will cause problems if we store /> in strings, etc. but we never do this.
+    return re.sub(r"(?<! )/>", " />", s)
 
 
 class Filter:
@@ -117,6 +129,7 @@ class Filter:
         i = 0
 
         def parse_list(depth=0):
+            # Arbitrary depths are fine, but in practice nothing is deeper than 5 levels.
             _MAX_DEPTH = 5
             if depth > _MAX_DEPTH:
                 raise ValueError(f"Filter is more than {_MAX_DEPTH} levels deep")
@@ -135,8 +148,7 @@ class Filter:
                 if sexp[i] == ")":
                     i += 1
                     return result
-
-                if sexp[i] == "(":
+                elif sexp[i] == "(":
                     result.append(parse_list(depth + 1))
                 else:
                     atom_start = i
@@ -267,9 +279,8 @@ class UncoveredBlock:
 def find_uncovered_blocks(project: db.Project) -> list[UncoveredBlock]:
     """Find all blocks not matched by any publish config's target filter.
 
-    Skips 'ignore' and 'metadata' blocks. Returns a list of UncoveredBlock.
+    (Skips 'ignore' and 'metadata' blocks.)
     """
-    from ambuda.models.proofing import ProjectConfig
 
     try:
         config = ProjectConfig.model_validate_json(project.config or "{}")
@@ -386,10 +397,23 @@ def _split_block_at_breaks(xml: etree._Element) -> list[etree._Element]:
     return sub_blocks
 
 
+def _trim_children(xml: etree._Element):
+    # Trim left
+    xml.text = (xml.text or "").lstrip()
+    # Trim right -- depends on if there are child elements
+    if len(xml):
+        xml[-1].tail = (xml[-1].tail or "").rstrip()
+    else:
+        xml.text = (xml.text or "").rstrip()
+
+
 def _rewrite_block_to_tei_xml(xml: etree._Element, image_number: int):
     """Rewrite a block of proofing XML into TEI XML."""
-    # Text reshaping
-    # TODO: move this elsewhere?
+
+    maybe_n = xml.attrib.get("n")
+    xml.attrib.clear()
+
+    # Inline elements
     for el in xml.iter():
         if el.tag == InlineType.STAGE:
             # Remove () for stage directions
@@ -404,8 +428,10 @@ def _rewrite_block_to_tei_xml(xml: etree._Element, image_number: int):
         elif el.tag == InlineType.SPEAKER:
             # Remove trailing "-" for speakers
             text = el.text or ""
-            text = re.sub(r"(.*?)\s*[-–]+\s*$", r"\1", text)
-            el.text = text.strip()
+            normed_text = re.sub(r"(.*?)\s*[-–]+\s*$", r"\1", text)
+            if text != normed_text:
+                el.attrib["rend"] = "dash"
+            el.text = normed_text.strip()
         elif el.tag == InlineType.CHAYA:
             # Remove surrounding [ ] brackets.
             text = (el.text or "").strip()
@@ -435,7 +461,6 @@ def _rewrite_block_to_tei_xml(xml: etree._Element, image_number: int):
         speaker = None
     if speaker is not None:
         old_tag = xml.tag
-        old_attrib = dict(xml.attrib)
         old_children = [x for x in xml if x.tag != InlineType.SPEAKER]
 
         speaker_tail = speaker.tail or ""
@@ -448,13 +473,13 @@ def _rewrite_block_to_tei_xml(xml: etree._Element, image_number: int):
             # Special case: <p> contains only speaker, so don't create a child elem.
             return
 
-        child = etree.SubElement(xml, old_tag, old_attrib)
+        child = etree.SubElement(xml, old_tag)
         child.text = (speaker_tail + (xml[-1].text or "")).strip()
         child.extend(old_children)
         _rewrite_block_to_tei_xml(child, image_number)
         # Can lose other attrs, but must preserve n if present.
-        if "n" in old_attrib:
-            child.attrib["n"] = old_attrib["n"]
+        if maybe_n:
+            child.attrib["n"] = maybe_n
         return
 
     # <error> and <fix>
@@ -507,8 +532,16 @@ def _rewrite_block_to_tei_xml(xml: etree._Element, image_number: int):
         xml.tag = TEITag.LG
     elif xml.tag == BlockType.HEADING:
         xml.tag = TEITag.HEAD
+        _trim_children(xml)
+    elif xml.tag in {BlockType.TRAILER, BlockType.TITLE}:
+        _trim_children(xml)
+    elif xml.tag == BlockType.SUBTITLE:
+        xml.tag = TEITag.TITLE
+        xml.attrib["type"] = "sub"
+        _trim_children(xml)
     elif xml.tag == BlockType.FOOTNOTE:
         xml.tag = TEITag.NOTE
+        xml.attrib["type"] = "footnote"
 
     # <p> text normalization
     if xml.tag == "p":
@@ -526,6 +559,7 @@ def _rewrite_block_to_tei_xml(xml: etree._Element, image_number: int):
         _normalize_text(xml)
 
         # <chaya> is currently supported only for <p> elements.
+        # TODO: migrate existing text to explicit prakrit / chaya
         try:
             chaya = next(x for x in xml if x.tag == "chaya")
         except StopIteration:
@@ -573,11 +607,8 @@ def _rewrite_block_to_tei_xml(xml: etree._Element, image_number: int):
         xml.clear()
         xml.extend(lines)
 
-    # At this point, block elements should have no attrib data left. Clean up lingering references
-    # from our proofing XML.
-    xml.attrib.clear()
-    if xml.tag == "note":
-        xml.attrib["type"] = "footnote"
+    if maybe_n:
+        xml.attrib["n"] = maybe_n
 
 
 def _concatenate_tei_xml_blocks_across_page_boundary(
@@ -589,8 +620,8 @@ def _concatenate_tei_xml_blocks_across_page_boundary(
     """
     if first.tag == "sp":
         # Special case for <sp>: concatenate children, leaving speaker alone.
-        assert len(first) == 2
-        _concatenate_tei_xml_blocks_across_page_boundary(first[1], second, page_number)
+        assert len(first) >= 2
+        _concatenate_tei_xml_blocks_across_page_boundary(first[-1], second, page_number)
         return
 
     pb = etree.SubElement(first, "pb")
@@ -598,11 +629,12 @@ def _concatenate_tei_xml_blocks_across_page_boundary(
 
     if first.tag in {"p", "lg"}:
         pb.tail = second.text or ""
-
     first.extend(second)
 
 
 class NCounter:
+    """Manages the `n` value across different types of blocks in a text."""
+
     def __init__(self):
         self.prefix = None
         self.block_ns = {}
@@ -630,32 +662,30 @@ class NCounter:
         self.block_ns[tag] = n
         return n
 
+    def maybe_assign_n(self, explicit_n: str | None, tei_xml: etree._Element):
+        if tei_xml.tag in {"note", "sp", InlineType.SPEAKER}:
+            # Do nothing -- these elements should never have an "n" assigned.
+            pass
+        elif explicit_n:
+            self.override(tei_xml.tag, explicit_n)
+            tei_xml.attrib["n"] = explicit_n
+        else:
+            n = self.next(tei_xml.tag)
+            tei_xml.attrib["n"] = n
 
-def _create_tei_sections_and_blocks(
+            if tei_xml.tag == "sp":
+                # Don't number <sp>, but do number its children.
+                for child_xml in tei_xml:
+                    # child may have an explicit n, which we should reuse
+                    self.maybe_assign_n(child_xml.attrib.get("n"), child_xml)
+
+
+def _rewrite_project_to_tei_xml(
     project: db.Project,
     config: db.PublishConfig,
-    revisions: list[db.Revision] | None = None,
-) -> TEIConversion:
+    revisions: list[db.Revision],
+) -> TEIRewrite:
     """Create TEI sections and blocks from a project."""
-    if revisions is None:
-        session = q.get_session()
-        subq = (
-            select(db.Revision.page_id, func.max(db.Revision.id).label("max_id"))
-            .where(db.Revision.project_id == project.id)
-            .group_by(db.Revision.page_id)
-            .subquery()
-        )
-        revisions = (
-            session.execute(
-                select(db.Revision)
-                .join(subq, db.Revision.id == subq.c.max_id)
-                .join(db.Page, db.Revision.page_id == db.Page.id)
-                .order_by(db.Page.order)
-            )
-            .scalars()
-            .all()
-        )
-
     rules = project_utils.parse_page_number_spec(project.page_numbers)
     page_numbers = project_utils.apply_rules(len(project.pages), rules)
 
@@ -694,6 +724,7 @@ def _create_tei_sections_and_blocks(
                 yield IndexedBlock(revision, image_number, block_index, page_xml)
 
     def _iter_filtered_blocks(revisions) -> Iterable[IndexedBlock]:
+        """Iterate over all blocks that match this config's filter."""
         for block in _iter_blocks(revisions):
             block_xml = block.page_xml[block.block_index]
             if block_xml.tag == BlockType.IGNORE:
@@ -712,182 +743,260 @@ def _create_tei_sections_and_blocks(
             ret[key] = value
         return ret
 
-    errors = []
-    # n --> block
-    element_map: dict[str, etree._Element] = {}
-    # n -> <note> block
-    footnote_map: dict[str, etree._Element] = {}
-    # n --> page ID (for tying blocks to the pages they come from.)
-    page_map: dict[str, int] = {}
-    # tag -> last n for this tag type.
-    ns = NCounter()
-    merge_next = None
-    active_sp = None
-    # Track page statuses
-    page_statuses = Counter()
+    @dc.dataclass
+    class Fragment:
+        xml: etree._Element
+        merge_next: bool
 
-    for block in _iter_filtered_blocks(revisions):
-        proof_xml = block.page_xml[block.block_index]
+    def _iter_raw_fragments(revisions):
+        """Iterate over raw TEI fragments, along with other control flow data."""
+        cur_page_id = None
+        for block in _iter_filtered_blocks(revisions):
+            # <pb> elements
+            page_id = block.revision.page_id
+            if page_id != cur_page_id:
+                yield ("page", page_id)
+                cur_page_id = page_id
 
-        # Track page status
-        revision = next((r for r in revisions if r.id == block.revision.id), None)
-        if revision and revision.status:
-            page_statuses[revision.status.name] += 1
+            proof_xml = block.page_xml[block.block_index]
 
-        if proof_xml.tag == BlockType.METADATA:
-            # `metadata` contains special commands for this function.
-            data = _parse_metadata(proof_xml.text or "")
-            if "speaker" in data:
-                # TODO: support other `speaker` settings.
-                active_sp = None
-            if "div.n" in data:
-                ns.set_prefix(data["div.n"])
-            continue
+            # Metadata (ingestion controls)
+            if proof_xml.tag == BlockType.METADATA:
+                # `metadata` contains special commands for this function.
+                data = _parse_metadata(proof_xml.text or "")
+                yield ("metadata", data)
+                continue
 
-        # Whether the block should merge into the next of the same type.
-        should_merge_next = (
-            proof_xml.get("merge-next", "false").lower() == "true"
-            or proof_xml.get("merge-text", "false").lower() == "true"
-        )
-
-        # Deep copy to avoid mutating page XML, then split at <break/> markers.
-        proof_copy = copy.deepcopy(proof_xml)
-        sub_blocks = _split_block_at_breaks(proof_copy)
-
-        for sub_block_idx, sub_block_xml in enumerate(sub_blocks):
-            tei_xml = sub_block_xml
-            _rewrite_block_to_tei_xml(tei_xml, block.image_number)
-
-            # TODO:
-            # <lg> inheriting from previous n <-- should add +1
-            # <sp><lg> <-- should be numbered
-            # merge-next should merge into next of same type
-
-            # Assign "n" to all blocks so that they have unique names (for translations, etc.)
-            # Only the first sub-block inherits the explicit n from the proof XML.
-            n = proof_xml.attrib.get("n") if sub_block_idx == 0 else None
-            if tei_xml.tag in {"note"}:
-                # Do nothing -- these elements should never have an "n" assigned.
-                pass
-            elif n and tei_xml.tag != "sp":
-                ns.override(tei_xml.tag, n)
-                # Explicit n is never added to `sp`, so skip.
-                tei_xml.attrib["n"] = n
-            else:
-                n = ns.next(tei_xml.tag)
-                tei_xml.attrib["n"] = n
-
-                if tei_xml.tag == "sp":
-                    for child_xml in tei_xml:
-                        if child_xml.tag == InlineType.SPEAKER:
-                            # <speaker> should never be numbered.
-                            continue
-                        if "n" in child_xml.attrib:
-                            # Don't overwrite existing `n`.
-                            continue
-                        n = ns.next(child_xml.tag)
-                        child_xml.attrib["n"] = n
-
-            _has_no_text = not (tei_xml.text or "").strip()
-            _has_one_stage_element = len(tei_xml) == 1 and tei_xml[0].tag == "stage"
-            _stage_has_no_tail = (
-                len(tei_xml) == 1 and not (tei_xml[0].tail or "").strip()
+            # XML blocks
+            proof_copy = copy.deepcopy(proof_xml)
+            sub_blocks = _split_block_at_breaks(proof_copy)
+            merge_next = (
+                proof_xml.get("merge-next", "false").lower() == "true"
+                or proof_xml.get("merge-text", "false").lower() == "true"
             )
-            _is_stage_only = (
-                _has_no_text and _has_one_stage_element and _stage_has_no_tail
-            )
-            if _is_stage_only:
-                # TODO: how reliable is this?
-                active_sp = None
-            if tei_xml.tag == "sp":
-                active_sp = None
-
-            # Page number
-            try:
-                # Subtract 1 because image_number is 1-indexed.
-                assert 1 <= block.image_number <= len(page_numbers)
-                print_page_number = page_numbers[block.image_number - 1]
-            except IndexError:
-                print_page_number = DEFAULT_PRINT_PAGE_NUMBER
-
-            if merge_next is not None and (
-                merge_next.tag == tei_xml.tag or merge_next.tag == "sp"
-            ):
-                # Only merge matching types (<p> and <p>, <lg> and <lg>, etc.)
-                # Otherwise we get weird behavior, e.g. merging <lg> with <note>
-                _concatenate_tei_xml_blocks_across_page_boundary(
-                    merge_next, tei_xml, print_page_number
+            for i, sub_block_xml in enumerate(sub_blocks):
+                tei_xml = sub_block_xml
+                _rewrite_block_to_tei_xml(tei_xml, block.image_number)
+                yield (
+                    "xml",
+                    Fragment(
+                        xml=tei_xml,
+                        merge_next=merge_next,
+                    ),
                 )
-                tei_xml = merge_next
-                merge_next = None
-            else:
-                if tei_xml.tag == "note":
-                    mark = proof_xml.attrib.get("mark")
-                    if mark:
-                        note_name = f"{block.image_number}.{mark}"
-                        footnote_map[note_name] = tei_xml
-                elif n:
-                    page_map[n] = block.revision.page_id
-                    if tei_xml.tag in {"p", "lg"} and active_sp is not None:
-                        active_sp.append(tei_xml)
-                    else:
-                        element_map[n] = tei_xml
 
-            if tei_xml.tag == "sp":
-                active_sp = tei_xml
+    n_to_page_id = {}
+    n_overrides = set()
+    TOPLEVEL = "__toplevel"
 
-            # Only the last sub-block can merge with the next block.
-            if should_merge_next and sub_block_idx == len(sub_blocks) - 1:
-                merge_next = tei_xml
+    def _iter_stitched_xml(revisions) -> Iterable[etree._Element]:
+        """Iterate over stitched TEI fragments."""
 
-    # Insert footnotes where we find matches.
-    if footnote_map:
-        fn_n = 1
-        for tei_block in element_map.values():
-            for el in tei_block.iter():
-                ref_target = el.attrib.get("target")
-                if el.tag == "ref" and ref_target in footnote_map:
-                    note_id = f"fn{fn_n}"
-                    fn_n += 1
-                    note = footnote_map[ref_target]
-                    note.attrib[f"{{{_XML_NS}}}id"] = note_id
-                    el.attrib["target"] = f"#{note_id}"
-                    tei_block.append(note)
+        nonlocal n_to_page_id, n_overrides
 
-    # Assemble blocks into a document.
-    tei_items = {}
-    for block_n, tree in element_map.items():
-        assert block_n in page_map
-        page_id = page_map[block_n]
-        block = TEIBlock(
-            xml=_to_string(tree),
-            slug=block_n,
-            page_id=page_id,
-        )
+        div = etree.Element("div")
+        div.attrib[TOPLEVEL] = "_"
+        sp = None
+        merges: dict[str, etree._Element] = {}
 
-        # HACK: for now, strip out footnote markup -- it's not supported
-        # and it looks ugly.
-        block.xml = re.sub(r"\[\^.*?\]", "", block.xml)
+        ns = NCounter()
+        cur_page_id = None
+        for f_type, data in _iter_raw_fragments(revisions):
+            if f_type == "metadata":
+                if "div.n" in data:
+                    # Handle old state
+                    yield div
 
-        section_n, _, verse_n = block_n.rpartition(".")
-        if section_n:
-            # Insert block into section.
-            if section_n not in tei_items:
-                section = TEISection(slug=section_n, blocks=[])
-                tei_items[section_n] = section
-            section = tei_items[section_n]
-            section.blocks.append(block)
+                    div_n = data["div.n"]
+                    ns.set_prefix(div_n)
+                    div = etree.Element("div")
+                    div.attrib["n"] = div_n
+                elif "speaker" in data:
+                    if not data["speaker"]:
+                        sp = None
+
+            elif f_type == "page":
+                cur_page_id = data
+
+            elif f_type == "xml":
+                assert cur_page_id is not None
+
+                xml = data.xml
+
+                # merge_next -- concatenate blocks as needed.
+                if merges.get(xml.tag) is not None or merges.get("sp") is not None:
+                    key = xml.tag if merges.get(xml.tag) is not None else "sp"
+                    first = merges[key]
+                    page_number = page_numbers[page_id_to_image_number[cur_page_id] - 1]
+                    _concatenate_tei_xml_blocks_across_page_boundary(
+                        first, xml, page_number
+                    )
+
+                    if not data.merge_next:
+                        del merges[key]
+                    continue
+                else:
+                    merges[xml.tag] = data.xml if data.merge_next else None
+
+                # @n -- populate from `ns` counter if not set manually.
+                if "n" in xml.attrib:
+                    n = xml.attrib["n"]
+                    ns.override(xml.tag, n)
+                    n_overrides.add(n)
+                else:
+                    xml.attrib["n"] = ns.next(xml.tag)
+
+                # n -> page_id mapping
+                n_to_page_id[xml.attrib["n"]] = cur_page_id
+
+                if sp is not None:
+                    sp.append(xml)
+                else:
+                    div.append(xml)
+
+                if xml.tag == "sp":
+                    sp = xml
+
+        yield div
+
+    def _sanitize_ns(divs: list[etree._Element]):
+        nonlocal n_to_page_id
+        # Single head / trailer
+        for div in divs:
+            for singleton_tag in ("head", "trailer"):
+                matches = div.findall(singleton_tag)
+                if len(matches) == 1 and matches[0].get("n") not in n_overrides:
+                    old_n = matches[0].get("n")
+                    matches[0].set("n", singleton_tag)
+                    if old_n in n_to_page_id:
+                        n_to_page_id[singleton_tag] = n_to_page_id.pop(old_n)
+
+        # If no <p> in divisions, use "1" instead of "lg1", etc.
+        has_p = any(div.find("p") is not None for div in divs)
+        if not has_p:
+            for div in divs:
+                for lg in div.findall("lg"):
+                    n = lg.get("n")
+                    if n and n not in n_overrides:
+                        new_n = n.replace("lg", "")
+                        lg.set("n", new_n)
+                        if n in n_to_page_id:
+                            n_to_page_id[new_n] = n_to_page_id.pop(n)
+
+    items = []
+    divs = list(_iter_stitched_xml(revisions))
+    _sanitize_ns(divs)
+    for div in divs:
+        if TOPLEVEL not in div.attrib:
+            assert "n" in div.attrib
+
+            blocks = []
+            for child in div:
+                assert "n" in child.attrib
+                n = child.attrib["n"]
+                assert n in n_to_page_id
+                blocks.append(
+                    TEIBlock(
+                        xml=_to_string(child),
+                        slug=child.attrib["n"],
+                        page_id=n_to_page_id[n],
+                    )
+                )
+
+            section = TEISection(
+                slug=div.attrib["n"],
+                blocks=blocks,
+            )
+            items.append(section)
         else:
-            # Append the block as a regular item.
-            # (Example: text with title and multiple sections)
-            tei_items[block_n] = block
+            for child in div:
+                assert "n" in child.attrib
+                n = child.attrib["n"]
+                assert n in n_to_page_id
+                items.append(
+                    TEIBlock(
+                        xml=_to_string(child),
+                        slug=n,
+                        page_id=n_to_page_id[n],
+                    )
+                )
 
-    items = list(tei_items.values())
-    return TEIConversion(
-        items=items,
-        errors=errors,
-        page_statuses=page_statuses,
-    )
+    page_statuses = Counter()
+    for revision in revisions:
+        page_statuses[revision.status.name] += 1
+
+    return TEIRewrite(items=items, errors=[], page_statuses=page_statuses)
+
+
+def _write_tei_header(xf, project: db.Project, config: db.PublishConfig):
+    with xf.element("teiHeader"):
+        with xf.element("fileDesc"):
+            with xf.element("titleStmt"):
+                with xf.element("title", {"type": "main"}):
+                    xf.write(config.title)
+                with xf.element("title", {"type": "sub"}):
+                    xf.write("A machine-readable edition")
+                if config.author:
+                    with xf.element("author"):
+                        xf.write(config.author)
+                with xf.element("principal"):
+                    xf.write("Arun Prasad")
+                with xf.element("respStmt"):
+                    with xf.element("persName"):
+                        # TODO: For now, just me. Change this in the future.
+                        xf.write("Arun Prasad")
+                    with xf.element("resp"):
+                        xf.write("Creation of machine-readable version.")
+
+            with xf.element("publicationStmt"):
+                with xf.element("authority"):
+                    xf.write("Ambuda (https://ambuda.org)")
+                with xf.element("availability"):
+                    with xf.element("p"):
+                        xf.write(
+                            "Distributed by Ambuda under a Creative Commons CC0 1.0 Universal Licence (public domain)"
+                        )
+                with xf.element("date"):
+                    xf.write(date.today().isoformat())
+
+            with xf.element("notesStmt"):
+                with xf.element("note"):
+                    xf.write(
+                        "This text has been created by direct export from Ambuda's proofing environment."
+                    )
+
+            with xf.element("sourceDesc"):
+                with xf.element("bibl"):
+                    if project.print_title:
+                        with xf.element("title"):
+                            xf.write(project.print_title)
+                    if project.editor:
+                        with xf.element("editor"):
+                            with xf.element("name"):
+                                xf.write(project.editor)
+                    if project.publisher:
+                        with xf.element("publisher"):
+                            xf.write(project.publisher)
+                    if project.publication_year:
+                        with xf.element("date"):
+                            xf.write(project.publication_year)
+                    if project.author:
+                        with xf.element("author"):
+                            xf.write(project.author)
+
+        with xf.element("encodingDesc"):
+            with xf.element("projectDesc"):
+                with xf.element("p"):
+                    xf.write("Ambuda is an online library of Sanskrit literature.")
+            with xf.element("editorialDesc"):
+                with xf.element("normalization"):
+                    with xf.element("p"):
+                        xf.write(
+                            "Normalization of whitespace around dandas and other punctuation marks."
+                        )
+
+        with xf.element("revisionDesc"):
+            pass
 
 
 def create_tei_document(
@@ -895,7 +1004,7 @@ def create_tei_document(
     config: db.PublishConfig,
     out_path: Path | None = None,
     revisions: list[db.Revision] | None = None,
-) -> TEIConversion:
+) -> TEIRewrite:
     """Convert the project to a TEI document for publication.
 
     If *out_path* is ``None``, only the conversion data is returned and no
@@ -905,101 +1014,41 @@ def create_tei_document(
     - rewrite proof XML into TEI XML. Proofing XML is more user-friendly than TEI XMl,
       and we're using it for now until we improve our editor.
     - stitch pages and blocks together, accounting for page breaks, fragments, etc.
+
+    Notes:
+    - `revisions` is exposed for dependency injection.
     """
 
-    conversion = _create_tei_sections_and_blocks(project, config, revisions=revisions)
+    if revisions is None:
+        session = q.get_session()
+        subq = (
+            select(db.Revision.page_id, func.max(db.Revision.id).label("max_id"))
+            .where(db.Revision.project_id == project.id)
+            .group_by(db.Revision.page_id)
+            .subquery()
+        )
+        revisions = (
+            session.execute(
+                select(db.Revision)
+                .join(subq, db.Revision.id == subq.c.max_id)
+                .join(db.Page, db.Revision.page_id == db.Page.id)
+                .order_by(db.Page.order)
+            )
+            .scalars()
+            .all()
+        )
+
+    conversion = _rewrite_project_to_tei_xml(project, config, revisions=revisions)
     if out_path is None:
         return conversion
 
-    MISSING = "(missing)"
-
-    errors = []
+    errors = conversion.errors
     with etree.xmlfile(out_path, encoding="utf-8") as xf:
         xf.write_declaration()
 
         with xf.element("TEI", xmlns="http://www.tei-c.org/ns/1.0"):
-            with xf.element("teiHeader"):
-                with xf.element("fileDesc"):
-                    with xf.element("titleStmt"):
-                        with xf.element("title", {"type": "main"}):
-                            xf.write(config.title)
-                        with xf.element("title", {"type": "sub"}):
-                            xf.write("A machine-readable edition")
-                        if config.author:
-                            with xf.element("author"):
-                                xf.write(config.author)
-                        with xf.element("principal"):
-                            xf.write("Arun Prasad")
-                        with xf.element("respStmt"):
-                            with xf.element("persName"):
-                                # TODO: For now, just me. Change this in the future.
-                                xf.write("Arun Prasad")
-                            with xf.element("resp"):
-                                xf.write("Creation of machine-readable version.")
-                    # </titleStmt>
+            _write_tei_header(xf, project, config)
 
-                    with xf.element("publicationStmt"):
-                        with xf.element("authority"):
-                            xf.write("Ambuda (https://ambuda.org)")
-                        with xf.element("availability"):
-                            with xf.element("p"):
-                                xf.write(
-                                    "Distributed by Ambuda under a Creative Commons CC0 1.0 Universal Licence (public domain)"
-                                )
-                        with xf.element("date"):
-                            xf.write(date.today().isoformat())
-                    # </publicationStmt>
-
-                    with xf.element("notesStmt"):
-                        with xf.element("note"):
-                            xf.write(
-                                "This text has been created by direct export from Ambuda's proofing environment."
-                            )
-                    # </notesStmt>
-
-                    with xf.element("sourceDesc"):
-                        with xf.element("bibl"):
-                            if project.print_title:
-                                with xf.element("title"):
-                                    xf.write(project.print_title)
-                            if project.editor:
-                                with xf.element("editor"):
-                                    with xf.element("name"):
-                                        xf.write(project.editor)
-                            if project.publisher:
-                                with xf.element("publisher"):
-                                    xf.write(project.publisher)
-                            with xf.element("pubPlace"):
-                                xf.write("TODO: publisher location")
-                            if project.publication_year:
-                                with xf.element("date"):
-                                    xf.write(project.publication_year)
-                            if project.author:
-                                with xf.element("author"):
-                                    xf.write(project.author)
-                    # </sourceDesc>
-                # </fileDesc>
-
-                with xf.element("encodingDesc"):
-                    with xf.element("projectDesc"):
-                        with xf.element("p"):
-                            xf.write(
-                                "Ambuda is an online library of Sanskrit literature."
-                            )
-                    with xf.element("editorialDesc"):
-                        with xf.element("normalization"):
-                            with xf.element("p"):
-                                xf.write(
-                                    "Normalization of whitespace around dandas and other punctuation marks."
-                                )
-                # </encodingDesc>
-
-                with xf.element("revisionDesc"):
-                    pass
-                # </revisionDesc>
-            # </teiHeader>
-
-            errors.extend(conversion.errors)
             with xf.element(
                 "text", {"xml:id": config.slug, "xml:lang": config.language}
             ):
@@ -1021,6 +1070,7 @@ def create_tei_document(
             # </text>
         # </TEI>
 
+    # Indent for a more pleasant appearance during exports, etc..
     indent_xml_file_in_place(out_path)
 
     return conversion

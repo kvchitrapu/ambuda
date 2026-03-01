@@ -305,7 +305,7 @@ TEI_XML_VALIDATION_SPEC = {
         attrib={"n"},
     ),
     TEITag.STAGE: ValidationSpec(attrib={"rend"}),
-    TEITag.SPEAKER: ValidationSpec(),
+    TEITag.SPEAKER: ValidationSpec(attrib={"rend"}),
     # XML_ID is sometimes defined in third-party texts.
     TEITag.LG: ValidationSpec(children={"l", "note", "pb"}, attrib={"n", XML_ID}),
     TEITag.L: ValidationSpec(children=INLINE_TEXT, attrib=set()),
