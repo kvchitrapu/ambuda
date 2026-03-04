@@ -10,7 +10,7 @@
 
 {% block content %}
 {{ m.project_header_nested('Stats', project) }}
-{{ m.project_tabs(project=project, active='stats', is_mod=current_user.is_moderator) }}
+{{ m.project_tabs(project=project, active='stats', is_mod=current_user.is_moderator, is_p2=current_user.is_p2) }}
 
 <div class="prose">
   <table>

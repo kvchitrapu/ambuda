@@ -2,6 +2,7 @@
 @import "tailwindcss/components";
 @import "tailwindcss/utilities";
 
+
 @layer components {
   ::selection {
     @apply text-black bg-yellow-200;
@@ -18,6 +19,11 @@
   }
   del {
     @apply bg-red-200 text-red-700;
+  }
+
+  .deva-serif {
+    /* font-family: "Noto Serif Devanagari", serif; */
+    font-family: "Tiro Devanagari Sanskrit", serif;
   }
 
   /* Needed to support the Alpine `x-cloak` attribute. */
@@ -47,11 +53,11 @@
 
   /* Dropdowns (e.g. in proofing editor) */
   .dropdown-pane {
-    @apply z-50 bg-white border absolute a-hover-underline;
+    @apply z-50 bg-slate-900 text-white border border-slate-700 absolute a-hover-underline;
     box-shadow: 0 2px 5px rgba(0,0,0,0.1);
   }
   .dropdown-item {
-    @apply block w-full text-left p-2 hover:bg-slate-100;
+    @apply block w-full text-left px-2 py-1 hover:bg-sky-500;
   }
 
   /* Sidebar */
@@ -67,8 +73,33 @@
 
   /* Custom elements. */
 
+  .s-chaya {
+    @apply px-2 py-0.5 bg-sky-100 rounded;
+    @apply border-l-2 border-r-2 border-sky-600;
+  }
   s-block {
-    @apply block mb-4;
+    @apply block my-4 leading-8;
+  }
+  s-speaker {
+    @apply block font-bold;
+  }
+  s-stage {
+    @apply italic text-slate-500;
+  }
+  s-trailer {
+    @apply block text-center;
+  }
+  s-sp s-p {
+    @apply pl-8;
+  }
+  s-sp s-lg {
+    @apply pl-16;
+  }
+  s-p {
+    @apply block;
+  }
+  s-sp s-p, s-sp s-lg {
+    @apply mt-4;
   }
   /* TEI <lg>, i.e. a Sanskrit verse. */
   s-lg {
@@ -135,5 +166,172 @@
   .heatmap rect.l3 { @apply fill-sky-200; }
   .heatmap rect.l4 { @apply fill-sky-300; }
 
+  /* ProseMirror editor */
+  .prosemirror-editor {
+    @apply bg-white;
+  }
+  .prosemirror-editor .ProseMirror {
+    @apply h-full outline-none;
+  }
+
+  .prosemirror-editor .ProseMirror p {
+    @apply mb-0;
+  }
+
+  .prosemirror-editor .ProseMirror-focused {
+    outline: none;
+  }
+
+  .pm-metadata {
+    @apply font-mono;
+  }
+
+  .pm-content-dom {
+    @apply w-full p-2 border border-slate-200 bg-white rounded font-normal min-h-[3rem] focus:outline-none focus:ring-2 focus:ring-blue-400 whitespace-pre-wrap;
+  }
+  .pm-check-pass {
+    @apply text-[11px] font-medium rounded-full px-2 py-0.5 leading-tight text-green-800 bg-green-100 border border-green-200;
+  }
+  .pm-check-fail {
+    @apply text-[11px] font-medium rounded-full px-2 py-0.5 leading-tight text-red-800 bg-red-50 border border-red-200;
+  }
+  .pm-html-tag {
+    @apply text-xs p-0.5 rounded bg-blue-100 text-blue-800 rounded;
+  }
+
+  .pm-html-tag-error {
+    @apply text-xs p-0.5 rounded bg-red-600 text-white rounded;
+  }
+
+  .pm-break-marker {
+    @apply text-black bg-gray-200 font-bold px-0.5 rounded;
+  }
+
+  /* Prosemirror mark CSS */
+  .pm-error, .pm-fix, .pm-flag, .pm-stage, .pm-speaker, .pm-chaya, .pm-prakrit, .pm-note, .pm-add, .pm-ellipsis, .pm-quote {
+    @apply border-b-2 pr-1;
+  }
+
+  .pm-bold {
+    font-weight: bold;
+  }
+
+  .pm-italic {
+    font-style: italic;
+  }
+
+  .pm-error {
+    @apply bg-red-100 text-red-800 border-red-500;
+  }
+
+  .pm-error:before {
+    content: "⛔ ";
+    @apply text-xs pl-1;
+  }
+
+  .pm-fix {
+    @apply bg-green-100 text-green-800 border-green-500;
+  }
+
+  .pm-fix:before {
+    content: "✅ ";
+    @apply text-xs pl-1;
+  }
+
+  .pm-flag {
+    @apply bg-yellow-100 text-yellow-800 border-yellow-500;
+  }
+
+  .pm-flag:before {
+    content: "? ";
+    @apply text-xs pl-1;
+  }
+
+  .pm-ref {
+    @apply bg-slate-200 rounded pr-1 text-xs;
+  }
+
+  .pm-ref:before {
+    content: "🦶: ";
+    @apply text-xs pl-1;
+  }
+
+  .pm-stage {
+    @apply bg-purple-100 text-purple-800 border-purple-500;
+  }
+
+  .pm-stage:before {
+    content: "🎬 ";
+    @apply text-xs pl-1;
+  }
+
+  .pm-speaker {
+    @apply bg-orange-100 text-orange-800 border-orange-500;
+  }
+
+  .pm-speaker:before {
+    content: "📣 ";
+    @apply text-xs pl-1;
+  }
+
+  .pm-chaya {
+    @apply bg-slate-500 text-white border-slate-600;
+  }
+
+  .pm-chaya:before {
+    content: "🌒 ";
+    @apply text-xs pl-1;
+  }
+
+  .pm-prakrit {
+    @apply bg-amber-100 border-amber-600;
+  }
+
+  .pm-prakrit:before {
+    content: "☀️ ";
+    @apply text-xs pl-1;
+  }
+
+  .pm-note {
+    @apply bg-yellow-200 border-yellow-500 italic;
+  }
+
+  .pm-note:before {
+    content: "📝 ";
+    @apply text-xs pl-1;
+  }
+
+  .pm-add {
+    @apply bg-blue-100 text-blue-800 border-blue-500;
+  }
+
+  .pm-add:before {
+    content: "+ ";
+    @apply text-xs pl-1;
+  }
+
+  .pm-ellipsis {
+    @apply bg-slate-200 text-slate-600 border-slate-400 italic;
+  }
+
+  .pm-ellipsis:before {
+    content: "… ";
+    @apply text-xs pl-1;
+  }
+
+  .pm-quote {
+    @apply bg-teal-100 text-teal-800 border-teal-500;
+  }
+
+  .pm-quote:before {
+    content: "💬";
+    @apply text-xs pl-1;
+  }
+
+  /* XML editor */
+  .xml-code {
+    @apply m-0 p-0 whitespace-pre-wrap break-words;
+    font-family: inherit;
+  }
 }
 

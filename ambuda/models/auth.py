@@ -1,10 +1,10 @@
 """Models related to user authentication and authorization."""
 
-from datetime import datetime
+from datetime import datetime, UTC
 
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
-from sqlalchemy import Text as Text_
-from sqlalchemy.orm import relationship
+from sqlalchemy import Text as Text_, event
+from sqlalchemy.orm import relationship, validates, Mapped, mapped_column
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from ambuda.models.base import Base, foreign_key, pk
@@ -19,13 +19,15 @@ class User(AmbudaUserMixin, Base):
     #: Primary key.
     id = pk()
     #: The user's username.
-    username = Column(String, nullable=False, unique=True)
+    username: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     #: The user's hashed password.
     password_hash = Column(String, nullable=False)
     #: The user's email.
-    email = Column(String, nullable=False, unique=True)
+    email: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     #: Timestamp at which this user record was created.
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(
+        DateTime, default=lambda: datetime.now(UTC).replace(tzinfo=None), nullable=False
+    )
 
     #: The user's self-description.
     description = Column(Text_, nullable=False, default="")
@@ -70,8 +72,16 @@ class User(AmbudaUserMixin, Base):
         return check_password_hash(self.password_hash, raw_password)
 
 
-class Role(Base):
+@event.listens_for(User, "before_insert")
+@event.listens_for(User, "before_update")
+def validate_user(mapper, connection, user):
+    if not user.username:
+        raise ValueError("User must have a valid username")
+    if not user.email or "@" not in user.email:
+        raise ValueError("User must have a valid email")
 
+
+class Role(Base):
     """A role.
 
     Roles are how we model fine-grained permissions on Ambuda.
@@ -84,14 +94,18 @@ class Role(Base):
     #: Name of the role.
     name = Column(String, unique=True, nullable=False)
     #: When this role was defined.
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(
+        DateTime, nullable=False, default=lambda: datetime.now(UTC).replace(tzinfo=None)
+    )
+
+    def __str__(self):
+        return self.name
 
     def __repr__(self):
         return f"<Role({self.id}, {self.name!r})>"
 
 
 class UserRoles(Base):
-
     """Secondary table for users and roles."""
 
     __tablename__ = "user_roles"
@@ -103,7 +117,6 @@ class UserRoles(Base):
 
 
 class PasswordResetToken(Base):
-
     """Models a "forgot password" recovery token."""
 
     __tablename__ = "auth_password_reset_tokens"
@@ -120,7 +133,9 @@ class PasswordResetToken(Base):
     #: deactivate / delete this token.)
     is_active = Column(Boolean, default=True, nullable=False)
     #: Timestamp at which this token was created.
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(
+        DateTime, default=lambda: datetime.now(UTC).replace(tzinfo=None), nullable=False
+    )
     #: Timestamp at which this token was used.
     used_at = Column(DateTime, nullable=True)
 

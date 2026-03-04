@@ -1,8 +1,8 @@
-from indic_transliteration import sanscript
+from vidyut.lipi import transliterate, Scheme
 
 
 def d(s) -> str:
-    return sanscript.transliterate(s, sanscript.HK, sanscript.DEVANAGARI)
+    return transliterate(s, Scheme.HarvardKyoto, Scheme.Devanagari)
 
 
 def test_index(client):
@@ -12,6 +12,7 @@ def test_index(client):
 
 def test_text(client):
     resp = client.get("/texts/pariksha/")
+    assert resp.status_code == 200
     assert d("parIkSA") in resp.text
 
 
@@ -63,3 +64,8 @@ def test_block_htmx(client):
     # Test is unchanged because we assume that the source text already in
     # Devanagari, so we don't apply transliteration.
     assert "<section>agniH</section>" in resp.text
+
+
+def test_download_pdf__missing(client):
+    resp = client.get("/texts/unknown-text/download-pdf")
+    assert resp.status_code == 404

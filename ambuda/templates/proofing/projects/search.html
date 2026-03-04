@@ -11,7 +11,7 @@
 
 {% block content %}
 {{ m.project_header_nested('Search', project) }}
-{{ m.project_tabs(project=project, active='edit') }}
+{{ m.project_tabs(project=project, active='edit', is_p2=current_user.is_p2) }}
 
 <div class="prose">
   <p>Use this simple search form to find typos across this project.</p>
@@ -19,7 +19,7 @@
 
 <form method="GET" class="bg-slate-100 p-4 my-4">
   {{ field(form.query) }}
-  <input class="btn btn-submit" type="submit" value="Search project">
+  <input class="btn btn-submit" type="submit" value="{{ _('Search project') }}">
 </form>
 
 {% if query %}

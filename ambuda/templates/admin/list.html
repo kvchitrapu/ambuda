@@ -1,0 +1,106 @@
+{% extends "admin/base.html" %}
+{% from "admin/macros.html" import flash_messages %}
+
+{% block title %}{{ model_name }}{% endblock %}
+
+{% block content %}
+<div class="max-w-full">
+  <div class="flex items-center justify-between mb-6">
+    <div>
+      <h1 class="text-3xl font-bold text-slate-800">{{ model_name }}</h1>
+      <p class="text-slate-600 mt-1" id="record-count">{{ total }} total records</p>
+    </div>
+    <div class="flex gap-2">
+      {% if tasks %}
+      <form method="POST" id="batch-form" class="flex gap-2">
+        <select name="task_slug" id="task-select" class="px-3 py-2 border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-purple-500">
+          <option value="">Select an action...</option>
+          {% for task in tasks %}
+          <option value="{{ task.slug }}">{{ task.name }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 transition">
+          Go
+        </button>
+      </form>
+      {% endif %}
+      {% if not read_only %}
+      <a href="{{ url_for('admin.create_model', model_name=model_name) }}"
+         class="px-4 py-2 bg-sky-600 text-white rounded hover:bg-sky-700 transition">
+        + Create New
+      </a>
+      {% endif %}
+    </div>
+  </div>
+
+  {{ flash_messages() }}
+
+  {% if search_key %}
+  <div class="mb-4">
+    <input type="text"
+           id="admin-search"
+           value="{{ search }}"
+           placeholder="Search by {{ search_key }}..."
+           class="w-full max-w-sm px-3 py-2 border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-sky-500 text-sm">
+  </div>
+  {% endif %}
+
+  <div id="table-container">
+    {% include "admin/list_table.html" %}
+  </div>
+</div>
+
+<script>
+  document.getElementById('table-container').addEventListener('change', function(e) {
+    if (e.target.id === 'select-all') {
+      const checkboxes = document.querySelectorAll('.row-checkbox');
+      checkboxes.forEach(cb => cb.checked = e.target.checked);
+    }
+  });
+
+  document.getElementById('batch-form')?.addEventListener('submit', function(e) {
+    const taskSlug = document.querySelector('select[name="task_slug"]').value;
+    if (!taskSlug) {
+      e.preventDefault();
+      alert('Please select an action');
+      return false;
+    }
+    this.action = "{{ url_for('admin.run_task', model_name=current_model, task_slug='__TASK__') }}".replace('__TASK__', taskSlug);
+  });
+
+  (function() {
+    const searchInput = document.getElementById('admin-search');
+    if (!searchInput) return;
+
+    const tableContainer = document.getElementById('table-container');
+    const recordCount = document.getElementById('record-count');
+    let timer = null;
+
+    searchInput.addEventListener('input', function() {
+      clearTimeout(timer);
+      timer = setTimeout(function() {
+        const params = new URLSearchParams(window.location.search);
+        const value = searchInput.value.trim();
+        if (value) {
+          params.set('search', value);
+        } else {
+          params.delete('search');
+        }
+        params.delete('page');
+        params.set('partial', '1');
+
+        fetch(window.location.pathname + '?' + params.toString())
+          .then(function(res) { return res.json(); })
+          .then(function(data) {
+            tableContainer.innerHTML = data.html;
+            recordCount.textContent = data.total + ' total records';
+
+            params.delete('partial');
+            const newUrl = window.location.pathname + (params.toString() ? '?' + params.toString() : '');
+            history.replaceState(null, '', newUrl);
+          });
+      }, 300);
+    });
+  })();
+</script>
+{% endblock %}

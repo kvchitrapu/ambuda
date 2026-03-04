@@ -1,16 +1,13 @@
-{% extends 'proofing/base-sidebar.html' %}
+{% extends 'proofing/base.html' %}
 {% import "macros/components.html" as components %}
-{% import "macros/proofing.html" as m %}
+{% import "macros/proofing.html" as m with context %}
 
 
 {% block title %}User: {{ user.username }} | Ambuda{% endblock %}
 
 
-{% block sidebar %}{{ m.main_nav('talk', current_user=current_user) }}{% endblock %}
-
-
 {% block content %}
-{% set url = url_for('proofing.user.summary', username=user.username) %}
+{% set url = url_for('user.summary', username=user.username) %}
 {{ m.nested_header('Admin', user.username, url) }}
 {{ m.user_tabs(user=user, active='admin', is_mod=current_user.is_moderator) }}
 
@@ -24,7 +21,7 @@
     {{ field.label }}
   </div>
   {% endfor %}
-  <input type="submit" class="btn btn-submit" value="Save changes">
+  <input type="submit" class="btn btn-submit" value="{{ _('Save changes') }}">
 </form>
 
 {% endblock %}

@@ -1,7 +1,7 @@
 from flask import Blueprint, abort, flash, redirect, render_template, url_for
 from flask_login import current_user, login_required
 from flask_wtf import FlaskForm
-from sqlalchemy import orm
+from sqlalchemy import orm, select
 from wtforms import BooleanField, StringField
 from wtforms.widgets import TextArea
 
@@ -42,23 +42,23 @@ def activity(username):
         abort(404)
 
     session = q.get_session()
-    recent_revisions = (
-        session.query(db.Revision)
+    stmt = (
+        select(db.Revision)
         .options(
             orm.defer(db.Revision.content),
             orm.joinedload(db.Revision.page).load_only(db.Page.id, db.Page.slug),
         )
         .filter_by(author_id=user_.id)
-        .order_by(db.Revision.created.desc())
+        .order_by(db.Revision.created_at.desc())
         .limit(100)
-        .all()
     )
-    recent_projects = (
-        session.query(db.Project)
+    recent_revisions = list(session.scalars(stmt).all())
+    stmt = (
+        select(db.Project)
         .filter_by(creator_id=user_.id)
         .order_by(db.Project.created_at.desc())
-        .all()
     )
+    recent_projects = list(session.scalars(stmt).all())
 
     recent_activity = [("revision", r.created, r) for r in recent_revisions]
     recent_activity += [("project", p.created_at, p) for p in recent_projects]
@@ -90,7 +90,7 @@ def edit(username):
         form.populate_obj(user_)
         session.commit()
         flash("Saved changes.", "success")
-        return redirect(url_for("proofing.user.summary", username=username))
+        return redirect(url_for("user.summary", username=username))
 
     return render_template("proofing/user/edit.html", user=user_, form=form)
 
@@ -114,6 +114,41 @@ def _make_role_form(roles, user_):
     return RolesForm()
 
 
+@bp.route("/<username>/bookmarks")
+@login_required
+def bookmarks(username):
+    """Show the user's bookmarked text blocks."""
+    user_ = q.user(username)
+    if not user_:
+        abort(404)
+
+    # Only this user can view their bookmarks
+    if username != current_user.username:
+        abort(403)
+
+    session = q.get_session()
+    stmt = (
+        select(db.TextBlockBookmark)
+        .options(
+            orm.joinedload(db.TextBlockBookmark.block)
+            .joinedload(db.TextBlock.text)
+            .load_only(db.Text.id, db.Text.slug, db.Text.title),
+            orm.joinedload(db.TextBlockBookmark.block)
+            .joinedload(db.TextBlock.section)
+            .load_only(db.TextSection.id, db.TextSection.slug, db.TextSection.title),
+        )
+        .filter_by(user_id=user_.id)
+        .order_by(db.TextBlockBookmark.created_at.desc())
+    )
+    user_bookmarks = list(session.scalars(stmt).all())
+
+    return render_template(
+        "proofing/user/bookmarks.html",
+        user=user_,
+        bookmarks=user_bookmarks,
+    )
+
+
 @bp.route("/<username>/admin", methods=["GET", "POST"])
 @moderator_required
 def admin(username):
@@ -125,7 +160,8 @@ def admin(username):
     session = q.get_session()
     # Exclude admin.
     # (Admin roles should be added manually by the server administrator.)
-    all_roles = [r for r in session.query(db.Role).all() if r.name != "admin"]
+    stmt = select(db.Role)
+    all_roles = [r for r in session.scalars(stmt).all() if r.name != "admin"]
     all_roles = sorted(all_roles, key=lambda x: x.name)
 
     form = _make_role_form(all_roles, user_)

@@ -1,11 +1,20 @@
+import dataclasses as dc
+import json
 import logging
 import re
+import uuid
+from datetime import UTC, datetime
+from pathlib import Path
+from xml.etree import ElementTree as ET
 
-from celery.result import GroupResult
+import sqlalchemy as sqla
+from celery import chain
+
 from flask import (
     Blueprint,
     current_app,
     flash,
+    jsonify,
     make_response,
     render_template,
     request,
@@ -15,17 +24,15 @@ from flask_babel import lazy_gettext as _l
 from flask_login import current_user, login_required
 from flask_wtf import FlaskForm
 from markupsafe import Markup, escape
-from sqlalchemy import orm
+from pydantic import BaseModel, TypeAdapter
+from sqlalchemy import orm, select
 from werkzeug.exceptions import abort
 from werkzeug.utils import redirect
 from wtforms import (
-    BooleanField,
-    FieldList,
-    Form,
-    FormField,
-    HiddenField,
+    FileField,
+    RadioField,
+    SelectField,
     StringField,
-    SubmitField,
 )
 from wtforms.validators import DataRequired, ValidationError
 from wtforms.widgets import TextArea
@@ -33,15 +40,59 @@ from wtforms_sqlalchemy.fields import QuerySelectField
 
 from ambuda import database as db
 from ambuda import queries as q
+from ambuda.enums import SitePageStatus
+from ambuda.models.proofing import ProjectSource, ProjectStatus
+from ambuda.rate_limit import limiter
 from ambuda.tasks import app as celery_app
+from ambuda.tasks import batch_llm as batch_llm_tasks
+from ambuda.tasks import llm_structuring as llm_structuring_tasks
 from ambuda.tasks import ocr as ocr_tasks
-from ambuda.utils import project_utils, proofing_utils
+from ambuda.tasks import projects as project_tasks
+from ambuda.utils import project_structuring, project_utils
+from ambuda.utils.llm_prompts import PRESET_PROMPTS
+from ambuda.utils.project_structuring import ProofBlock, ProofPage, ProofProject
 from ambuda.utils.revisions import add_revision
 from ambuda.views.proofing.decorators import moderator_required, p2_required
+from ambuda.views.proofing.page import _get_image_url
+from ambuda.views.proofing.main import (
+    _is_allowed_document_file,
+    _required_if_url,
+    _required_if_local,
+)
 from ambuda.views.proofing.stats import calculate_stats
 
 bp = Blueprint("project", __name__)
 LOG = logging.getLogger(__name__)
+
+
+@dc.dataclass
+class BlockType:
+    tag: str
+    label: str
+
+
+@dc.dataclass
+class Language:
+    code: str
+    label: str
+
+
+BLOCK_TYPES = [
+    BlockType("p", "paragraph"),
+    BlockType("verse", "verse"),
+    BlockType("heading", "heading"),
+    BlockType("title", "title"),
+    BlockType("subtitle", "subtitle"),
+    BlockType("footnote", "footnote"),
+    BlockType("trailer", "trailer"),
+    BlockType("ignore", "ignore"),
+]
+
+LANGUAGES = [
+    Language(code="sa", label="Sanskrit"),
+    Language(code="hi", label="Hindi"),
+    Language(code="en", label="English"),
+]
 
 
 def _is_valid_page_number_spec(_, field):
@@ -51,12 +102,29 @@ def _is_valid_page_number_spec(_, field):
         raise ValidationError("The page number spec isn't valid.") from e
 
 
+def _is_valid_slug(_, field):
+    if not re.match(r"[a-zA-Z0-9-]+$", field.data):
+        raise ValidationError("Invalid slug (should be alphanumeric or '-')")
+
+
 class EditMetadataForm(FlaskForm):
+    slug = StringField(
+        _l("Slug"),
+        render_kw={
+            "placeholder": _l("e.g. avantisundarikatha"),
+        },
+        validators=[DataRequired(), _is_valid_slug],
+    )
     display_title = StringField(
         _l("Display title"),
         render_kw={
             "placeholder": _l("e.g. Avantisundarīkathā"),
         },
+        validators=[DataRequired()],
+    )
+    status = SelectField(
+        _l("Status"),
+        choices=[(status.value, status.value) for status in ProjectStatus],
         validators=[DataRequired()],
     )
     description = StringField(
@@ -132,49 +200,27 @@ class EditMetadataForm(FlaskForm):
     )
 
 
-class MatchForm(Form):
-    selected = BooleanField()
-    replace = HiddenField(validators=[DataRequired()])
-
-
-class SearchForm(FlaskForm):
-    class Meta:
-        csrf = False
-
-    query = StringField(_l("Query"), validators=[DataRequired()])
-
-
 class DeleteProjectForm(FlaskForm):
     slug = StringField("Slug", validators=[DataRequired()])
 
 
-class ReplaceForm(SearchForm):
-    class Meta:
-        csrf = False
-
-    replace = StringField(_l("Replace"), validators=[DataRequired()])
-
-
-def validate_matches(form, field):
-    for match_form in field:
-        if match_form.errors:
-            raise ValidationError("Invalid match form values.")
-
-
-class PreviewChangesForm(ReplaceForm):
-    class Meta:
-        csrf = False
-
-    matches = FieldList(FormField(MatchForm), validators=[validate_matches])
-    submit = SubmitField("Preview changes")
-
-
-class ConfirmChangesForm(ReplaceForm):
-    class Meta:
-        csrf = False
-
-    confirm = SubmitField("Confirm")
-    cancel = SubmitField("Cancel")
+class ReplacePdfForm(FlaskForm):
+    pdf_source = RadioField(
+        "Source",
+        choices=[
+            ("url", "Upload from a URL"),
+            ("local", "Upload from my computer"),
+        ],
+        validators=[DataRequired()],
+    )
+    pdf_url = StringField(
+        "PDF URL",
+        validators=[_required_if_url("Please provide a valid PDF URL.")],
+    )
+    local_file = FileField(
+        "PDF file",
+        validators=[_required_if_local("Please provide a PDF file.")],
+    )
 
 
 @bp.route("/<slug>/")
@@ -184,14 +230,24 @@ def summary(slug):
     if project_ is None:
         abort(404)
 
+    assert project_
     session = q.get_session()
-    recent_revisions = (
-        session.query(db.Revision)
+    stmt = (
+        sqla.select(db.Revision)
+        .options(
+            orm.defer(db.Revision.content),
+            orm.selectinload(db.Revision.author).load_only(db.User.username),
+            orm.selectinload(db.Revision.page).load_only(db.Page.slug),
+            orm.selectinload(db.Revision.project).load_only(
+                db.Project.slug, db.Project.display_title
+            ),
+            orm.selectinload(db.Revision.status).load_only(db.PageStatus.name),
+        )
         .filter_by(project_id=project_.id)
-        .order_by(db.Revision.created.desc())
+        .order_by(db.Revision.created_at.desc())
         .limit(10)
-        .all()
     )
+    recent_revisions = list(session.scalars(stmt).all())
 
     page_rules = project_utils.parse_page_number_spec(project_.page_numbers)
     page_titles = project_utils.apply_rules(len(project_.pages), page_rules)
@@ -210,15 +266,24 @@ def activity(slug):
     if project_ is None:
         abort(404)
 
+    assert project_
     session = q.get_session()
-    recent_revisions = (
-        session.query(db.Revision)
-        .options(orm.defer(db.Revision.content))
+    stmt = (
+        sqla.select(db.Revision)
+        .options(
+            orm.defer(db.Revision.content),
+            orm.selectinload(db.Revision.author).load_only(db.User.username),
+            orm.selectinload(db.Revision.page).load_only(db.Page.slug),
+            orm.selectinload(db.Revision.project).load_only(
+                db.Project.slug, db.Project.display_title
+            ),
+            orm.selectinload(db.Revision.status).load_only(db.PageStatus.name),
+        )
         .filter_by(project_id=project_.id)
-        .order_by(db.Revision.created.desc())
+        .order_by(db.Revision.created_at.desc())
         .limit(100)
-        .all()
     )
+    recent_revisions = list(session.scalars(stmt).all())
     recent_activity = [("revision", r.created, r) for r in recent_revisions]
     recent_activity.append(("project", project_.created_at, project_))
 
@@ -229,8 +294,37 @@ def activity(slug):
     )
 
 
+@bp.route("/<slug>/tools")
+@p2_required
+def tools(slug):
+    """Show project tools (batch operations, reordering, etc.)."""
+    project_ = q.project(slug)
+    if project_ is None:
+        abort(404)
+
+    return render_template("proofing/projects/tools.html", project=project_)
+
+
+@bp.route("/<slug>/tools/uncovered-blocks")
+@p2_required
+def uncovered_blocks(slug):
+    """Show blocks not matched by any publish config filter."""
+    from ambuda.utils.text_publishing import find_uncovered_blocks
+
+    project_ = q.project(slug)
+    if project_ is None:
+        abort(404)
+
+    blocks = find_uncovered_blocks(project_)
+    return render_template(
+        "proofing/projects/uncovered-blocks.html",
+        project=project_,
+        uncovered_blocks=blocks,
+    )
+
+
 @bp.route("/<slug>/edit", methods=["GET", "POST"])
-@login_required
+@p2_required
 def edit(slug):
     """Edit the project's metadata."""
     project_ = q.project(slug)
@@ -240,11 +334,58 @@ def edit(slug):
     form = EditMetadataForm(obj=project_)
     if form.validate_on_submit():
         session = q.get_session()
+        new_slug = form.slug.data
+
+        # Check if slug has changed and validate uniqueness
+        if new_slug != project_.slug:
+            existing_project = q.project(new_slug)
+            if existing_project is not None:
+                form.slug.errors.append(_l("A project with this slug already exists."))
+                return render_template(
+                    "proofing/projects/edit.html",
+                    project=project_,
+                    form=form,
+                )
+
+        # Store original status before populate_obj
+        original_status = project_.status
         form.populate_obj(project_)
+
+        # Only allow p2 users to change status
+        if not current_user.is_p2:
+            project_.status = original_status
+
+        descriptions = request.form.getlist("source_description[]")
+        urls = request.form.getlist("source_url[]")
+        source_ids = request.form.getlist("source_id[]")
+        submitted_ids = {int(sid) for sid in source_ids if sid}
+        for source in list(project_.sources):
+            if source.id not in submitted_ids:
+                session.delete(source)
+        existing_map = {s.id: s for s in project_.sources}
+        for desc, url, sid in zip(descriptions, urls, source_ids):
+            desc = desc.strip()
+            url = url.strip() or None
+            if not desc:
+                continue
+            if sid and int(sid) in existing_map:
+                source = existing_map[int(sid)]
+                source.description = desc
+                source.url = url
+            else:
+                session.add(
+                    ProjectSource(
+                        project_id=project_.id,
+                        description=desc,
+                        url=url,
+                        author_id=current_user.id,
+                    )
+                )
+
         session.commit()
 
         flash(_l("Saved changes."), "success")
-        return redirect(url_for("proofing.project.summary", slug=slug))
+        return redirect(url_for("proofing.project.summary", slug=new_slug))
 
     return render_template(
         "proofing/projects/edit.html",
@@ -270,13 +411,53 @@ def download_as_text(slug):
     if project_ is None:
         abort(404)
 
-    content_blobs = [
-        p.revisions[-1].content if p.revisions else "" for p in project_.pages
+    pages = [
+        ProofPage.from_content_and_page_id(
+            p.revisions[-1].content if p.revisions else "", p.id
+        )
+        for p in project_.pages
     ]
-    raw_text = proofing_utils.to_plain_text(content_blobs)
+    raw_text = project_structuring.to_plain_text(pages)
 
     response = make_response(raw_text, 200)
     response.mimetype = "text/plain"
+    return response
+
+
+@bp.route("/<slug>/download/epub")
+def download_as_epub(slug):
+    """Download the project as EPUB."""
+    import io
+    import tempfile
+    from pathlib import Path
+
+    from ambuda.utils.text_exports import create_epub
+
+    project_ = q.project(slug)
+    if project_ is None:
+        abort(404)
+
+    assert project_
+
+    # If the project has a published text, use the standard export path.
+    text = next(iter(project_.texts), None) if project_.texts else None
+    if text is None:
+        abort(404)
+
+    with tempfile.NamedTemporaryFile(suffix=".epub", delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+
+    try:
+        create_epub(text, tmp_path)
+        epub_bytes = tmp_path.read_bytes()
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    response = make_response(epub_bytes, 200)
+    response.headers["Content-Type"] = "application/epub+zip"
+    response.headers["Content-Disposition"] = (
+        f'attachment; filename="{project_.slug}.epub"'
+    )
     return response
 
 
@@ -291,21 +472,51 @@ def download_as_xml(slug):
     if project_ is None:
         abort(404)
 
-    project_meta = {
-        "title": project_.display_title,
-        "author": project_.author,
-        "publication_year": project_.publication_year,
-        "publisher": project_.publisher,
-        "editor": project_.editor,
-    }
-    project_meta = {k: v or "TODO" for k, v in project_meta.items()}
-    content_blobs = [
-        p.revisions[-1].content if p.revisions else "" for p in project_.pages
+    assert project_
+    pages = [
+        ProofPage.from_content_and_page_id(
+            p.revisions[-1].content if p.revisions else "", p.id
+        )
+        for p in project_.pages
     ]
-    xml_blob = proofing_utils.to_tei_xml(project_meta, content_blobs)
+    xml_blob = project_structuring.to_tei_xml(pages)
 
     response = make_response(xml_blob, 200)
     response.mimetype = "text/xml"
+    return response
+
+
+@bp.route("/<slug>/download/project-xml")
+@login_required
+def download_as_project_xml(slug):
+    """Download the project as XML with per-page content and metadata."""
+    project_ = q.project(slug)
+    if project_ is None:
+        abort(404)
+
+    assert project_
+    root = ET.Element("project")
+
+    metadata = ET.SubElement(root, "metadata")
+    ET.SubElement(metadata, "name").text = project_.display_title or project_.slug
+    ET.SubElement(metadata, "pages").text = str(len(project_.pages))
+    ET.SubElement(metadata, "downloaded").text = datetime.now(UTC).isoformat()
+    ET.SubElement(metadata, "user").text = current_user.username
+
+    for p in project_.pages:
+        content = p.revisions[-1].content if p.revisions else ""
+        page_el = ET.SubElement(root, "page")
+        page_el.set("slug", p.slug)
+        page_el.text = content
+
+    xml_bytes = ET.tostring(root, encoding="unicode", xml_declaration=False)
+    xml_blob = '<?xml version="1.0" encoding="UTF-8"?>\n' + xml_bytes
+
+    response = make_response(xml_blob, 200)
+    response.mimetype = "text/xml"
+    response.headers["Content-Disposition"] = (
+        f'attachment; filename="{project_.slug}.xml"'
+    )
     return response
 
 
@@ -321,353 +532,31 @@ def stats(slug):
     if project_ is None:
         abort(404)
 
+    assert project_
     stats_ = calculate_stats(project_)
     return render_template(
         "proofing/projects/stats.html", project=project_, stats=stats_
     )
 
 
-@bp.route("/<slug>/search")
-@login_required
-def search(slug):
-    """Search across all of the project's pages.
-
-    This is useful for finding typos that repeat across the project.
-    """
-    project_ = q.project(slug)
-    if project_ is None:
-        abort(404)
-
-    form = SearchForm(request.args)
-    if not form.validate():
-        return render_template(
-            "proofing/projects/search.html", project=project_, form=form
-        )
-
-    query = form.query.data
-    results = []
-    for page_ in project_.pages:
-        if not page_.revisions:
-            continue
-
-        matches = []
-
-        latest = page_.revisions[-1]
-        for line in latest.content.splitlines():
-            if query in line:
-                matches.append(
-                    {
-                        "text": escape(line).replace(
-                            query, Markup(f"<mark>{escape(query)}</mark>")
-                        ),
-                    }
-                )
-        if matches:
-            results.append(
-                {
-                    "slug": page_.slug,
-                    "matches": matches,
-                }
-            )
-    return render_template(
-        "proofing/projects/search.html",
-        project=project_,
-        form=form,
-        query=query,
-        results=results,
-    )
-
-
-def _replace_text(project_, replace_form: ReplaceForm, query: str, replace: str):
-    """
-    Gather all matches for the "query" string and pair them the "replace" string.
-    """
-
-    results = []
-
-    query_pattern = re.compile(
-        query, re.UNICODE
-    )  # Compile the regex pattern with Unicode support
-
-    LOG.debug(f"Search/Replace text with {query} and {replace}")
-    for page_ in project_.pages:
-        if not page_.revisions:
-            continue
-        matches = []
-        latest = page_.revisions[-1]
-        LOG.debug(f"{__name__}: {page_.slug}")
-        for line_num, line in enumerate(latest.content.splitlines()):
-            if query_pattern.search(line):
-                try:
-                    marked_query = query_pattern.sub(
-                        lambda m: Markup(f"<mark>{escape(m.group(0))}</mark>"), line
-                    )
-                    marked_replace = query_pattern.sub(
-                        Markup(f"<mark>{escape(replace)}</mark>"), line
-                    )
-                    LOG.debug(f"Search/Replace > marked query: {marked_query}")
-                    LOG.debug(f"Search/Replace > marked replace: {marked_replace}")
-                    matches.append(
-                        {
-                            "query": marked_query,
-                            "replace": marked_replace,
-                            "checked": False,
-                            "line_num": line_num,
-                        }
-                    )
-                except TimeoutError:
-                    # Handle the timeout for regex operation, e.g., log a warning or show an error message
-                    LOG.warning(
-                        f"Regex operation timed out for line {line_num}: {line}"
-                    )
-
-        if matches:
-            results.append(
-                {
-                    "slug": page_.slug,
-                    "matches": matches,
-                }
-            )
-
-    return results
-
-
-@bp.route("/<slug>/replace", methods=["GET", "POST"])
-@p2_required
-def replace(slug):
-    """Search and replace a string across all of the project's pages.
-
-    This is useful to replace a string across the project in one shot.
-    """
-    project_ = q.project(slug)
-    if project_ is None:
-        abort(404)
-
-    form = ReplaceForm(request.form)
-    if not form.validate():
-        invalid_keys = list(form.errors.keys())
-        LOG.debug(f"Invalid form - {request.method}, invalid keys: {invalid_keys}")
-        return render_template(
-            "proofing/projects/replace.html", project=project_, form=ReplaceForm()
-        )
-
-    # search for "query" string and replace with "update" string
-    query = form.query.data
-    replace = form.replace.data
-    results = _replace_text(project_, replace_form=form, query=query, replace=replace)
-    num_matches = sum(len(r["matches"]) for r in results)
-
-    return render_template(
-        "proofing/projects/replace.html",
-        project=project_,
-        form=form,
-        submit_changes_form=PreviewChangesForm(),
-        query=query,
-        replace=replace,
-        num_matches=num_matches,
-        results=results,
-    )
-
-
-def _select_changes(project_, selected_keys, query: str, replace: str):
-    """
-    Mark "query" strings
-    """
-    results = []
-    LOG.debug(f"{__name__}: Mark changes with {query} and {replace}")
-    query_pattern = re.compile(
-        query, re.UNICODE
-    )  # Compile the regex pattern with Unicode support
-    for page_ in project_.pages:
-        if not page_.revisions:
-            continue
-
-        latest = page_.revisions[-1]
-        matches = []
-        for line_num, line in enumerate(latest.content.splitlines()):
-
-            form_key = f"match{page_.slug}-{line_num}"
-            replace_form_key = f"match{page_.slug}-{line_num}-replace"
-
-            if selected_keys.get(form_key) == "selected":
-                LOG.debug(f"{__name__}: {form_key}: {selected_keys.get(form_key)}")
-                LOG.debug(
-                    f"{__name__}: {replace_form_key}: {request.form.get(replace_form_key)}"
-                )
-                LOG.debug(f"{__name__}: {form_key}: Appended")
-                replaced_line = query_pattern.sub(replace, line)
-                matches.append(
-                    {
-                        "query": line,
-                        "replace": replaced_line,
-                        "line_num": line_num,
-                    }
-                )
-
-        results.append({"page": page_, "matches": matches})
-        LOG.debug(f"{__name__}: Total matches appended: {len(matches)}")
-
-    selected_count = sum(value == "selected" for value in selected_keys.values())
-    LOG.debug(f"{__name__} > Number of selected changes = {selected_count}")
-
-    return render_template(
-        "proofing/projects/confirm_changes.html",
-        project=project_,
-        form=ConfirmChangesForm(),
-        query=query,
-        replace=replace,
-        results=results,
-    )
-
-
-@bp.route("/<slug>/submit-changes", methods=["GET", "POST"])
-@p2_required
-def submit_changes(slug):
-    """Submit selected changes across all of the project's pages.
-
-    This is useful to replace a string across the project in one shot.
-    """
-
-    project_ = q.project(slug)
-    if project_ is None:
-        abort(404)
-
-    LOG.debug(
-        f"{__name__}: SUBMIT_CHANGES --- {request.method} > {list(request.form.keys())}"
-    )
-
-    # FIXME: find a way to validate this form. Current `matches` are coming in the way of validators.
-    form = PreviewChangesForm(request.form)
-    # if not form.validate():
-    #     # elif request.form.get("form_submitted") is None:
-    #     invalid_keys = list(form.errors.keys())
-    #     LOG.debug(f'{__name__}: Invalid form values - {request.method}, invalid keys: {invalid_keys}')
-    #     return redirect(url_for("proofing.project.replace", slug=slug))
-
-    render = None
-    # search for "query" string and replace with "update" string
-    query = form.query.data
-    replace = form.replace.data
-
-    LOG.debug(
-        f"{__name__}: ({request.method})>  Got to submit method with {query}->{replace} "
-    )
-    LOG.debug(f"{__name__}: {request.method} > {list(request.form.keys())}")
-    selected_keys = {
-        key: value
-        for key, value in request.form.items()
-        if key.startswith("match") and not key.endswith("replace")
-    }
-    render = _select_changes(project_, selected_keys, query=query, replace=replace)
-
-    return render
-
-
-@bp.route("/<slug>/confirm_changes", methods=["GET", "POST"])
-@p2_required
-def confirm_changes(slug):
-    """Confirm changes to replace a string across all of the project's pages."""
-    project_ = q.project(slug)
-    if project_ is None:
-        abort(404)
-    LOG.debug(
-        f"{__name__}: confirm_changes {request.method} > Keys: {list(request.form.keys())}, Items: {list(request.form.items())}"
-    )
-    form = ConfirmChangesForm(request.form)
-    if not form.validate():
-        flash("Invalid input.", "danger")
-        invalid_keys = list(form.errors.keys())
-        LOG.error(
-            f"{__name__}: Invalid form - {request.method}, invalid keys: {invalid_keys}"
-        )
-        return redirect(url_for("proofing.project.replace", slug=slug))
-
-    if form.confirm.data:
-        LOG.debug(f"{__name__}: {request.method} > Confirmed!")
-        query = form.query.data
-        replace = form.replace.data
-
-        # Get the changes from the form and store them in a list
-        pages = {}
-
-        # Iterate over the dictionary `request.form`
-        for key, value in request.form.items():
-            # Check if key matches the pattern
-            match = re.match(r"match(\d+)-(\d+)-replace", key)
-            if match:
-                # Extract page_slug and line_num from the key
-                page_slug = match.group(1)
-                line_num = int(match.group(2))
-                if page_slug not in pages:
-                    pages[page_slug] = {}
-                pages[page_slug][line_num] = value
-
-        for page_slug, changed_lines in pages.items():
-            # Get the corresponding `Page` object
-            LOG.debug(f"{__name__}: Project - {project_.slug}, Page : {page_slug}")
-
-            # Page query needs id for project and slug for page
-            page = q.page(project_.id, page_slug)
-            if not page:
-                LOG.error(
-                    f"{__name__}: Page not found for project - {project_.slug}, page : {page_slug}"
-                )
-                return render_template(url_for("proofing.project.replace", slug=slug))
-
-            latest = page.revisions[-1]
-            current_lines = latest.content.splitlines()
-            # Iterate over the `lines` dictionary
-            for line_num, replace_value in changed_lines.items():
-                # Check if the line_num exists in the dictionary for this page
-                LOG.debug(
-                    f"{__name__}: Current - {current_lines[line_num]}, Length of lines = {len(current_lines)}"
-                )
-                if line_num < len(current_lines):
-                    # Replace the line with the replacement value
-                    current_lines[line_num] = replace_value
-                else:
-                    LOG.error(
-                        f"{__name__}: Invalid line number {line_num} in {page_slug} which has only {len(current_lines)}"
-                    )
-                    continue
-            # Join the lines into a single string
-            new_content = "\n".join(current_lines)
-            # Check if the page content has changed
-            if new_content != latest.content:
-                # Add a new revision to the page
-                new_summary = f'Replaced "{query}" with "{replace}"'
-                new_revision = add_revision(
-                    page=page,
-                    summary=new_summary,
-                    content=new_content,
-                    status=page.status.name,
-                    version=page.version,
-                    author_id=current_user.id,
-                )
-                LOG.debug(f"{__name__}: New reviion > {page_slug}: {new_revision}")
-
-        flash("Changes applied.", "success")
-        return redirect(url_for("proofing.project.activity", slug=slug))
-    elif form.cancel.data:
-        LOG.debug(f"{__name__}: confirm_changes Cancelled")
-        return redirect(url_for("proofing.project.edit", slug=slug))
-
-    return render_template(url_for("proofing.project.edit", slug=slug))
-
-
 @bp.route("/<slug>/batch-ocr", methods=["GET", "POST"])
+@limiter.limit("3/hour", methods=["POST"])
 @p2_required
 def batch_ocr(slug):
     project_ = q.project(slug)
     if project_ is None:
         abort(404)
 
+    assert project_
     if request.method == "POST":
-        task = ocr_tasks.run_ocr_for_project(
-            app_env=current_app.config["AMBUDA_ENVIRONMENT"],
-            project=project_,
-        )
-        if task:
+        unedited = [p for p in project_.pages if p.version == 0]
+        if unedited:
+            task = ocr_tasks.run_ocr_for_project.apply_async(
+                kwargs=dict(
+                    app_env=current_app.config["AMBUDA_ENVIRONMENT"],
+                    project_slug=project_.slug,
+                ),
+            )
             return render_template(
                 "proofing/projects/batch-ocr-post.html",
                 project=project_,
@@ -688,40 +577,503 @@ def batch_ocr(slug):
 
 @bp.route("/batch-ocr-status/<task_id>")
 def batch_ocr_status(task_id):
-    r = GroupResult.restore(task_id, app=celery_app)
-    assert r, task_id
+    r = celery_app.AsyncResult(task_id)
 
-    if r.results:
-        current = r.completed_count()
-        total = len(r.results)
-        percent = current / total
-
-        status = None
-        if total:
-            if current == total:
-                status = "SUCCESS"
-            else:
-                status = "PROGRESS"
-        else:
-            status = "FAILURE"
-
-        data = {
-            "status": status,
-            "current": current,
-            "total": total,
-            "percent": percent,
-        }
+    info = r.info or {}
+    if isinstance(info, Exception):
+        current = total = percent = 0
+        failed_pages = []
     else:
-        data = {
-            "status": "PENDING",
-            "current": 0,
-            "total": 0,
-            "percent": 0,
-        }
+        current = info.get("current", 0)
+        total = info.get("total", 0)
+        percent = 100 * current / total if total else 0
+        failed_pages = info.get("failed_pages", [])
 
     return render_template(
         "include/ocr-progress.html",
+        status=r.status,
+        current=current,
+        total=total,
+        percent=percent,
+        failed_pages=failed_pages,
+    )
+
+
+class BlockDiff(BaseModel):
+    type: str
+    content: str | None = None
+    text: str | None = None
+    n: str | None = None
+    lang: str | None = None
+    mark: str | None = None
+    merge_next: bool = False
+    index: int | None = None  # Original block index for existing blocks
+
+
+class PageDiff(BaseModel):
+    slug: str
+    version: int
+    blocks: list[BlockDiff]
+    ignore: bool = False
+
+
+class ProjectDiff(BaseModel):
+    project: str
+    pages: list[PageDiff]
+
+
+@bp.route("/<slug>/batch-editing", methods=["GET", "POST"])
+@p2_required
+def batch_editing(slug):
+    project_ = q.project(slug)
+    if project_ is None:
+        abort(404)
+
+    assert project_
+    if request.method == "POST":
+        data = request.form.get("structure_data")
+        if not data:
+            flash("No data provided", "error")
+            return redirect(url_for("proofing.project.batch_editing", slug=slug))
+
+        try:
+            project_diff = ProjectDiff.model_validate_json(data)
+        except json.JSONDecodeError:
+            flash("Invalid structure data format", "error")
+            return redirect(url_for("proofing.project.batch_editing", slug=slug))
+
+        # Group all batch changes with a batch ID so we can revert/dedupe later.
+        session = q.get_session()
+        revision_batch = db.RevisionBatch(user_id=current_user.id)
+        session.add(revision_batch)
+        session.flush()
+
+        changed_pages = []
+        unchanged_pages = []
+        errors = []
+
+        page_slugs = []
+        for p in project_diff.pages:
+            page_slugs.append(p.slug)
+        pages = q.pages_with_revisions(project_.id, page_slugs)
+        page_map = {p.slug: p for p in pages}
+
+        for page_diff in project_diff.pages:
+            if page_diff.ignore:
+                continue
+
+            page_slug = page_diff.slug
+            if page_slug not in page_map:
+                errors.append(f"Page {page_slug} not found")
+                continue
+
+            page = page_map[page_slug]
+            if not page.revisions:
+                errors.append(f"Page {page_slug} has no revisions.")
+                continue
+
+            latest_revision = page.revisions[-1]
+            old_content = latest_revision.content
+            old_structured_page = ProofPage.from_revision(latest_revision)
+
+            new_blocks = []
+            had_parse_error = False
+            for i, block_data in enumerate(page_diff.blocks):
+                content = block_data.content
+                if content is None:
+                    source_index = block_data.index
+                    if source_index is not None:
+                        content = old_structured_page.blocks[source_index].content
+                    else:
+                        content = ""
+
+                try:
+                    new_block = ProofBlock(
+                        type=block_data.type,
+                        content=content,
+                        lang=block_data.lang,
+                        text=block_data.text,
+                        n=block_data.n,
+                        mark=block_data.mark,
+                        merge_next=block_data.merge_next,
+                    )
+                except KeyError as e:
+                    errors.append(f"Could not parse data for {page_slug}/{i}.")
+                    had_parse_error = True
+                    break
+
+                new_blocks.append(new_block)
+
+            if had_parse_error:
+                errors.append(f"Could not parse edits for {page_slug}.")
+                continue
+
+            new_structured_page = ProofPage(blocks=new_blocks, id=page.id)
+
+            new_content = new_structured_page.to_xml_string()
+            if old_content == new_content:
+                unchanged_pages.append(page_slug)
+                continue
+
+            try:
+                add_revision(
+                    page=page,
+                    summary="Batch structuring",
+                    content=new_content,
+                    version=page_diff.version,
+                    author_id=current_user.id,
+                    status_id=page.status_id,
+                    batch_id=revision_batch.id,
+                )
+                changed_pages.append(page_slug)
+            except Exception as e:
+                errors.append(f"Failed to save page {page_slug}: {str(e)}")
+                LOG.error(f"Failed to save batch structuring for {page_slug}: {e}")
+
+        _plural = lambda n: "s" if n > 1 else ""
+
+        message_parts = []
+        if changed_pages:
+            message_parts.append(
+                f"Saved {len(changed_pages)} changed page{_plural(len(changed_pages))}"
+            )
+        if unchanged_pages:
+            message_parts.append(f"{len(unchanged_pages)} unchanged")
+        if not changed_pages and not unchanged_pages:
+            message_parts.append("No pages to save")
+
+        message = ", ".join(message_parts) + "."
+        if errors:
+            message += f" ({len(errors)} error{_plural(len(errors))})"
+            flash(message, "warning")
+        elif len(changed_pages) > 0:
+            flash(message, "success")
+        else:
+            flash(message, "info")
+
+        return redirect(url_for("proofing.project.summary", slug=slug))
+
+    pages_with_content = []
+    for page in project_.pages:
+        if page.revisions:
+            latest_revision = page.revisions[-1]
+            structured_data = ProofPage.from_revision(latest_revision)
+
+            pages_with_content.append(
+                {
+                    "slug": page.slug,
+                    "version": page.version,
+                    "blocks": structured_data.blocks,
+                }
+            )
+
+    return render_template(
+        "proofing/projects/batch-editing.html",
+        project=project_,
+        pages_with_content=pages_with_content,
+        block_types=BLOCK_TYPES,
+        languages=LANGUAGES,
+    )
+
+
+@bp.route("/<slug>/parse-content", methods=["POST"])
+@login_required
+def parse_content(slug):
+    """Parse content and return structured blocks.
+
+    This is a convenience API for the batch editing workflow.
+    """
+    project_ = q.project(slug)
+    if project_ is None:
+        abort(404)
+
+    data = request.get_json()
+    if not data or "content" not in data:
+        return jsonify({"error": "No content provided"}), 400
+
+    content = data["content"]
+    if not content or not content.strip():
+        return jsonify({"error": "Content is empty"}), 400
+
+    try:
+        # page_id is not used, so use a dummy value
+        parsed_page = ProofPage.from_content_and_page_id(content, page_id=0)
+        blocks = []
+        for block in parsed_page.blocks:
+            blocks.append(
+                {
+                    "type": block.type,
+                    "content": block.content,
+                    "lang": block.lang,
+                    "text": block.text,
+                    "n": block.n,
+                    "mark": block.mark,
+                    "merge_next": block.merge_next,
+                }
+            )
+
+        return jsonify({"blocks": blocks})
+    except Exception as e:
+        LOG.error(f"Failed to parse content: {e}")
+        return jsonify({"error": f"Failed to parse content: {str(e)}"}), 500
+
+
+@bp.route("/<slug>/batch-llm-structuring", methods=["GET", "POST"])
+@limiter.limit("3/hour", methods=["POST"])
+def batch_llm_structuring(slug):
+    project_ = q.project(slug)
+    if project_ is None:
+        abort(404)
+
+    assert project_
+    if request.method == "POST":
+        edited = [p for p in project_.pages if p.version > 0]
+        if edited:
+            task = llm_structuring_tasks.run_structuring_for_project.apply_async(
+                kwargs=dict(
+                    app_env=current_app.config["AMBUDA_ENVIRONMENT"],
+                    project_slug=project_.slug,
+                ),
+            )
+            return render_template(
+                "proofing/projects/batch-llm-structuring-post.html",
+                project=project_,
+                status="PENDING",
+                current=0,
+                total=0,
+                percent=0,
+                task_id=task.id,
+            )
+        else:
+            flash(_l("No edited pages found in this project."))
+
+    return render_template(
+        "proofing/projects/batch-llm-structuring.html",
+        project=project_,
+    )
+
+
+@bp.route("/batch-llm-structuring-status/<task_id>")
+def batch_llm_structuring_status(task_id):
+    r = celery_app.AsyncResult(task_id)
+
+    info = r.info or {}
+    if isinstance(info, Exception):
+        current = total = percent = 0
+        failed_pages = []
+    else:
+        current = info.get("current", 0)
+        total = info.get("total", 0)
+        percent = 100 * current / total if total else 0
+        failed_pages = info.get("failed_pages", [])
+
+    return render_template(
+        "include/structuring-progress.html",
+        status=r.status,
+        current=current,
+        total=total,
+        percent=percent,
+        failed_pages=failed_pages,
+    )
+
+
+@bp.route("/<slug>/batch-llm", methods=["GET", "POST"])
+@limiter.limit("3/hour", methods=["POST"])
+@p2_required
+def batch_llm(slug):
+    """Run a batch LLM prompt over a range of pages, storing results as suggestions."""
+    project_ = q.project(slug)
+    if project_ is None:
+        abort(404)
+
+    assert project_
+    if request.method == "GET":
+        return render_template(
+            "proofing/projects/batch-llm.html",
+            project=project_,
+            total_pages=len(project_.pages),
+            preset_prompts=PRESET_PROMPTS,
+        )
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No JSON data provided"}), 400
+
+    prompt_key = data.get("prompt")
+    custom_prompt = data.get("custom_prompt")
+    page_start = data.get("page_start")
+    page_end = data.get("page_end")
+
+    if not page_start or not page_end:
+        return jsonify({"error": "page_start and page_end are required"}), 400
+
+    # Resolve prompt template
+    if prompt_key and prompt_key in PRESET_PROMPTS:
+        prompt_template = PRESET_PROMPTS[prompt_key]["template"]
+    elif custom_prompt:
+        if "{content}" not in custom_prompt:
+            return jsonify(
+                {"error": "Custom prompt must contain {content} placeholder"}
+            ), 400
+        prompt_template = custom_prompt
+    else:
+        return jsonify({"error": "A valid preset or custom prompt is required"}), 400
+
+    # Find the order range from start/end page slugs
+    start_slug = str(page_start)
+    end_slug = str(page_end)
+    start_order = None
+    end_order = None
+    for p in project_.pages:
+        if p.slug == start_slug:
+            start_order = p.order
+        if p.slug == end_slug:
+            end_order = p.order
+
+    if start_order is None or end_order is None:
+        return jsonify({"error": "Invalid page range"}), 400
+
+    # Filter pages within the order range that have content
+    page_slugs = [
+        p.slug
+        for p in project_.pages
+        if start_order <= p.order <= end_order and p.version > 0
+    ]
+
+    if not page_slugs:
+        return jsonify({"error": "No edited pages found in the given range"}), 400
+
+    batch_id = str(uuid.uuid4())
+    task = batch_llm_tasks.run_batch_llm_for_project(
+        app_env=current_app.config["AMBUDA_ENVIRONMENT"],
+        project=project_,
+        prompt_template=prompt_template,
+        page_slugs=page_slugs,
+        batch_id=batch_id,
+    )
+
+    if task:
+        redirect_url = url_for(
+            "proofing.project.batch_llm_progress", slug=slug, task_id=task.id
+        )
+        return jsonify({"redirect": redirect_url})
+    else:
+        return jsonify({"error": "Failed to start batch LLM task"}), 500
+
+
+@bp.route("/<slug>/batch-llm-progress/<task_id>")
+@p2_required
+def batch_llm_progress(slug, task_id):
+    """Show the progress page for a batch LLM run."""
+    project_ = q.project(slug)
+    if project_ is None:
+        abort(404)
+
+    return render_template(
+        "proofing/projects/batch-llm-progress.html",
+        project=project_,
+        task_id=task_id,
+        status="PENDING",
+    )
+
+
+@bp.route("/batch-llm-status/<task_id>")
+def batch_llm_status(task_id):
+    """Poll the status of a batch LLM task."""
+    from celery.result import AsyncResult
+
+    r = AsyncResult(task_id, app=celery_app)
+    state = r.state  # PENDING, STARTED, SUCCESS, FAILURE, etc.
+
+    if state == "SUCCESS":
+        result = r.result or {}
+        data = {
+            "status": "SUCCESS",
+            "created": result.get("created", 0),
+            "skipped": result.get("skipped", 0),
+            "total": result.get("total", 0),
+        }
+    elif state == "FAILURE":
+        data = {"status": "FAILURE", "error": str(r.result)}
+    elif state == "PENDING":
+        data = {"status": "PENDING"}
+    else:
+        # STARTED or any other active state
+        data = {"status": "PROGRESS"}
+
+    return render_template(
+        "include/batch-llm-progress.html",
         **data,
+    )
+
+
+@bp.route("/<slug>/reorder-pages", methods=["GET", "POST"])
+@p2_required
+def reorder_pages(slug):
+    """Reorder the pages in a project."""
+    project_ = q.project(slug)
+    if project_ is None:
+        abort(404)
+
+    assert project_
+    if request.method == "POST":
+        data = request.get_json()
+        if not data or "page_ids" not in data:
+            return jsonify({"error": "No page_ids provided"}), 400
+
+        page_ids = data["page_ids"]
+        project_page_ids = {p.id for p in project_.pages}
+        if set(page_ids) != project_page_ids:
+            return jsonify({"error": "Invalid page IDs"}), 400
+
+        image_uuids = data.get("image_uuids")
+        if image_uuids is not None:
+            project_uuids = {p.uuid for p in project_.pages}
+            if set(image_uuids) != project_uuids:
+                return jsonify({"error": "Invalid image UUIDs"}), 400
+
+        session = q.get_session()
+        order_mapping = {page_id: i for i, page_id in enumerate(page_ids)}
+        slug_mapping = {page_id: str(i + 1) for i, page_id in enumerate(page_ids)}
+        session.execute(
+            sqla.update(db.Page)
+            .where(db.Page.id.in_(page_ids))
+            .values(
+                order=sqla.case(order_mapping, value=db.Page.id),
+                slug=sqla.case(slug_mapping, value=db.Page.id),
+            )
+        )
+        if image_uuids is not None:
+            tmp_mapping = {pid: f"tmp-{pid}" for pid in page_ids}
+            uuid_mapping = dict(zip(page_ids, image_uuids))
+            for mapping in [tmp_mapping, uuid_mapping]:
+                session.execute(
+                    sqla.update(db.Page)
+                    .where(db.Page.id.in_(page_ids))
+                    .values(uuid=sqla.case(mapping, value=db.Page.id))
+                )
+        session.commit()
+        return jsonify({"ok": True})
+
+    pages_data = []
+    for page in project_.pages:
+        latest = page.revisions[-1] if page.revisions else None
+        preview = latest.content[:200] if latest else ""
+        pages_data.append(
+            {
+                "id": page.id,
+                "slug": page.slug,
+                "uuid": page.uuid,
+                "order": page.order,
+                "preview": preview,
+                "image_url": _get_image_url(project_, page),
+            }
+        )
+
+    return render_template(
+        "proofing/projects/reorder.html",
+        project=project_,
+        pages_data=pages_data,
     )
 
 
@@ -742,9 +1094,13 @@ def admin(slug):
     form = DeleteProjectForm()
     if form.validate_on_submit():
         if form.slug.data == slug:
-            session = q.get_session()
-            session.delete(project_)
-            session.commit()
+            project_tasks.delete_project.apply_async(
+                kwargs=dict(
+                    project_slug=slug,
+                    app_environment=current_app.config["AMBUDA_ENVIRONMENT"],
+                ),
+                headers={"initiated_by": current_user.username},
+            )
 
             flash(f"Deleted project {slug}")
             return redirect(url_for("proofing.index"))
@@ -755,4 +1111,114 @@ def admin(slug):
         "proofing/projects/admin.html",
         project=project_,
         form=form,
+    )
+
+
+@bp.route("/<slug>/replace-pdf", methods=["GET", "POST"])
+@p2_required
+def replace_pdf(slug):
+    project_ = q.project(slug)
+    if project_ is None:
+        abort(404)
+
+    form = ReplacePdfForm()
+    if not form.validate_on_submit():
+        return render_template(
+            "proofing/projects/replace-pdf.html",
+            project=project_,
+            form=form,
+        )
+
+    pdf_source = form.pdf_source.data
+
+    app_env = current_app.config["AMBUDA_ENVIRONMENT"]
+
+    if pdf_source == "url":
+        pdf_url = form.pdf_url.data
+        pdf_task = project_tasks.replace_project_pdf_from_url.si(
+            project_slug=slug,
+            pdf_url=pdf_url,
+            app_environment=app_env,
+        )
+    else:
+        filename = form.local_file.raw_data[0].filename
+        if not _is_allowed_document_file(filename):
+            flash("Please upload a PDF.")
+            return render_template(
+                "proofing/projects/replace-pdf.html",
+                project=project_,
+                form=form,
+            )
+
+        file_data = form.local_file.data
+        file_data.seek(0, 2)
+        size = file_data.tell()
+        file_data.seek(0)
+        if size > 128 * 1024 * 1024:
+            flash("PDF must be under 128 MB.")
+            return render_template(
+                "proofing/projects/replace-pdf.html",
+                project=project_,
+                form=form,
+            )
+
+        upload_dir = Path(current_app.config["UPLOAD_FOLDER"]) / "pdf-upload"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+
+        temp_id = str(uuid.uuid4())
+        pdf_path = upload_dir / f"{temp_id}.pdf"
+        form.local_file.data.save(pdf_path)
+
+        pdf_task = project_tasks.replace_project_pdf.si(
+            project_slug=slug,
+            pdf_path=str(pdf_path),
+            app_environment=app_env,
+        )
+
+    task = pdf_task.apply_async(headers={"initiated_by": current_user.username})
+
+    return render_template(
+        "proofing/projects/replace-pdf-post.html",
+        project=project_,
+        status=task.status,
+        current=0,
+        total=0,
+        percent=0,
+        task_id=task.id,
+    )
+
+
+@bp.route("/<slug>/replace-ocr-bounding-boxes", methods=["GET", "POST"])
+@limiter.limit("3/hour", methods=["POST"])
+@p2_required
+def replace_ocr_bounding_boxes(slug):
+    """Re-run OCR to update bounding box data for all pages without creating new revisions."""
+    project_ = q.project(slug)
+    if project_ is None:
+        abort(404)
+
+    assert project_
+    if request.method == "POST":
+        if list(project_.pages):
+            task = ocr_tasks.replace_ocr_bounding_boxes_for_project.apply_async(
+                kwargs=dict(
+                    app_env=current_app.config["AMBUDA_ENVIRONMENT"],
+                    project_slug=project_.slug,
+                ),
+            )
+            return render_template(
+                "proofing/projects/batch-ocr-post.html",
+                project=project_,
+                status="PENDING",
+                current=0,
+                total=0,
+                percent=0,
+                task_id=task.id,
+            )
+        else:
+            flash(_l("This project has no pages."))
+
+    return render_template(
+        "proofing/projects/replace-ocr-bounding-boxes.html",
+        project=project_,
     )

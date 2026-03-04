@@ -1,3 +1,5 @@
+import { createSearchMatcher } from './sanskrit-search';
+
 function sortAscending(field) {
   return (a, b) => (a.dataset[field] < b.dataset[field] ? -1 : 1);
 }
@@ -29,23 +31,21 @@ export default (defaultField) => ({
     const { list } = this.$refs;
     this.data = [...list.children].map((x) => ({
       key: x.dataset.key,
-      // Store title in lowercase to support case-insensitive searching
-      title: x.dataset.title.toLowerCase(),
+      title: x.dataset.title,
     }));
-    // Collect all keys in `this.displayed`.
-    this.displayed = new Set([...list.children].map((x) => x.dataset.key));
+    this.matcher = createSearchMatcher(this.data, (x) => x.title);
+    this.displayed = new Set(this.data.map((x) => x.key));
+    this.sort();
   },
 
   /** Filter the list by the user's query string. */
   filter() {
-    if (!this.query) return;
-
-    const query = this.query.toLowerCase();
-    // toLowerCase for case-insensitive matching.
-    const newKeys = this.data
-      .filter((x) => x.title.includes(query))
-      .map((x) => x.key);
-    this.displayed = new Set(newKeys);
+    if (!this.query) {
+      this.displayed = new Set(this.data.map((x) => x.key));
+      return;
+    }
+    const matches = this.matcher.filter(this.query);
+    this.displayed = new Set(matches.map((x) => x.key));
   },
 
   /** Sort the filtered list by field `this.field` in order `this.order`. */
@@ -55,5 +55,16 @@ export default (defaultField) => ({
     [...list.children]
       .sort(orderFn(this.field))
       .forEach((node) => list.appendChild(node));
+  },
+
+  /** Toggle sort on a column: click once for asc, again for desc, again to reset. */
+  sortBy(newField) {
+    if (this.field === newField) {
+      this.order = this.order === 'asc' ? 'desc' : 'asc';
+    } else {
+      this.field = newField;
+      this.order = 'asc';
+    }
+    this.sort();
   },
 });

@@ -7,12 +7,28 @@ export default {
     return `/api/dictionaries/${sourcesStr}/${query}`;
   },
 
+  ajaxBharatiQuery: (query) => `/api/bharati/query/${query}`,
+
+  ajaxBharatiGrammar: (form, lemma, parse) => `/api/bharati/grammar?form=${encodeURIComponent(form)}&lemma=${encodeURIComponent(lemma)}&parse=${encodeURIComponent(parse)}`,
+
   dictionaryQuery: (sources, query) => {
     const sourcesStr = sources.join(',');
     return `/tools/dictionaries/${sourcesStr}/${query}`;
   },
 
   parseData: (textSlug, blockSlug) => `/api/parses/${textSlug}/${blockSlug}`,
+
+  publishProjectText: (projectSlug, textSlug) => `/proofing/${projectSlug}/publish/${textSlug}/preview`,
+
+  proofingAutoStructure: () => '/api/proofing/auto-structure',
+
+  proofingBlockCheck: () => '/api/proofing/block-check',
+
+  proofingMeterCheck: () => '/api/proofing/meter-check',
+
+  proofingPageData: (projectSlug, pageSlug) => `/api/proofing/${projectSlug}/${pageSlug}/page-data`,
+
+  proofingSave: (projectSlug, pageSlug) => `/api/proofing/${projectSlug}/${pageSlug}/save`,
 
   // TODO: where to put this?
   getTextSlug: () => {

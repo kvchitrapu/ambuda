@@ -1,0 +1,260 @@
+{% extends 'proofing/base-sidebar.html' %}
+{% import "macros/components.html" as components %}
+{% import "macros/proofing.html" as m %}
+
+
+{% block title %}Reorder Pages: {{ project.display_title }} | Ambuda{% endblock %}
+
+
+{% block sidebar %}{{ m.main_nav('projects', current_user=current_user) }}{% endblock %}
+
+
+{% block content %}
+{{ m.project_header_nested('Reorder Pages', project) }}
+{{ m.project_tabs(project=project, active='tools', is_p2=current_user.is_p2) }}
+
+{{ components.flash_messages() }}
+
+<div x-data="reorderPages()" class="max-w-full">
+
+  <div class="flex items-center gap-4 mb-3">
+    <p class="text-sm text-slate-500">{{ _('Shift-click to select a range, then drag to move. Cmd/Ctrl-click to toggle individual rows.') }}</p>
+    <label class="flex items-center gap-2 text-sm whitespace-nowrap cursor-pointer select-none">
+      <input type="checkbox" x-model="locked" class="rounded border-slate-300">
+      {{ _('Lock text to image') }}
+    </label>
+  </div>
+
+  <template x-if="activeSelected().size > 0">
+    <div class="bg-blue-50 border border-blue-200 rounded px-3 py-2 mb-2 text-sm flex items-center justify-between">
+      <span><span x-text="activeSelected().size" class="font-bold"></span> page(s) selected &mdash; drag any selected row to move them all</span>
+      <button @click="clearSelection()" class="text-xs text-blue-600 hover:underline">Clear selection</button>
+    </div>
+  </template>
+
+  <div class="grid grid-cols-[14rem_1fr] gap-4">
+
+    <div>
+      <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">{{ _('Image') }}</div>
+      <div class="border border-slate-200 rounded select-none"
+           x-ref="imageList"
+           @dragover.prevent="onDragOver('image', $event)"
+           @dragleave="onDragLeave('image', $event)"
+           @drop.prevent="onDrop('image', $event)"
+           @dragend="onDragEnd('image')">
+        <template x-for="(page, index) in col.image.items" :key="'i-'+page.uuid">
+          <div class="flex items-center gap-2 px-3 py-2 border-b border-slate-100 last:border-b-0"
+               :class="col.image.selected.has(index) ? 'bg-blue-50' : 'hover:bg-slate-50'"
+               :data-index="index"
+               draggable="true"
+               @click="onClick('image', $event, index)"
+               @dragstart="onDragStart('image', $event, index)">
+            <span class="text-slate-400 text-xs w-8 text-right" x-text="index + 1"></span>
+            <span class="font-medium text-sm truncate flex-1" x-text="page.slug"></span>
+            <button @click.stop="previewSlug = page.slug; previewUrl = page.image_url; previewOpen = true"
+                    class="text-slate-400 hover:text-slate-700 shrink-0"
+                    title="Preview image">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                      d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+              </svg>
+            </button>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <div class="min-w-0">
+      <div class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">{{ _('Text') }}</div>
+      <div class="border border-slate-200 rounded select-none overflow-hidden"
+           x-ref="textList"
+           @dragover.prevent="onDragOver('text', $event)"
+           @dragleave="onDragLeave('text', $event)"
+           @drop.prevent="onDrop('text', $event)"
+           @dragend="onDragEnd('text')">
+        <template x-for="(page, index) in col.text.items" :key="'t-'+page.id">
+          <div class="flex items-center gap-3 px-3 py-2 border-b border-slate-100 last:border-b-0 min-w-0"
+               :class="col.text.selected.has(index) ? 'bg-blue-50' : 'hover:bg-slate-50'"
+               :data-index="index"
+               draggable="true"
+               @click="onClick('text', $event, index)"
+               @dragstart="onDragStart('text', $event, index)">
+            <span class="text-slate-400 text-xs w-8 text-right" x-text="index + 1"></span>
+            <span class="font-medium text-sm w-24" x-text="page.slug"></span>
+            <span class="text-xs text-slate-500 truncate flex-1" x-text="page.preview"></span>
+          </div>
+        </template>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="mt-4 flex items-center gap-3">
+    <button @click="save()" :disabled="saving" class="btn btn-submit">
+      <span x-show="!saving">{{ _('Save order') }}</span>
+      <span x-show="saving">{{ _('Saving...') }}</span>
+    </button>
+    <span x-show="saveStatus" x-text="saveStatus" class="text-sm"
+          :class="saveOk ? 'text-green-600' : 'text-red-600'"></span>
+  </div>
+
+  <div x-show="previewOpen" x-cloak
+       class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+       @click.self="previewOpen = false"
+       @keydown.escape.window="previewOpen = false">
+    <div class="relative bg-white rounded-lg shadow-xl max-w-3xl max-h-[90vh] overflow-auto">
+      <div class="sticky top-0 flex items-center justify-between px-4 py-2 bg-white border-b border-slate-200">
+        <span class="text-sm font-medium" x-text="previewSlug"></span>
+        <button @click="previewOpen = false" class="text-slate-400 hover:text-slate-700">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <div class="p-4">
+        <img :src="previewUrl" class="w-full" alt="Page image">
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function reorderPages() {
+  const raw = {{ pages_data|tojson }};
+  const HIGHLIGHT = ['bg-blue-100', 'border-t-2', 'border-t-blue-400'];
+
+  return {
+    col: {
+      text:  { items: raw.map(p => ({id: p.id, slug: p.slug, preview: p.preview})), selected: new Set(), lastClicked: null, dragIndex: null },
+      image: { items: raw.map(p => ({id: p.id, slug: p.slug, uuid: p.uuid, image_url: p.image_url})), selected: new Set(), lastClicked: null, dragIndex: null },
+    },
+    locked: true,
+    imagesDecoupled: false,
+    _highlightEls: [],
+    saving: false, saveStatus: '', saveOk: false,
+    previewOpen: false, previewUrl: '', previewSlug: '',
+
+    _affectedCols(c) { return this.locked ? ['text', 'image'] : [c]; },
+
+    _clearHighlight() {
+      for (const el of this._highlightEls) el.classList.remove(...HIGHLIGHT);
+      this._highlightEls = [];
+    },
+
+    _setHighlight(srcCol, index) {
+      const els = this._affectedCols(srcCol)
+        .map(c => this.$refs[c + 'List']?.querySelector(`[data-index="${index}"]`))
+        .filter(Boolean);
+      if (els.length === this._highlightEls.length && els.every((el, i) => el === this._highlightEls[i])) return;
+      this._clearHighlight();
+      this._highlightEls = els;
+      for (const el of els) el.classList.add(...HIGHLIGHT);
+    },
+
+    activeSelected() {
+      return this.col.text.selected.size > 0 ? this.col.text.selected : this.col.image.selected;
+    },
+
+    clearSelection() {
+      for (const c of ['text', 'image']) {
+        this.col[c].selected = new Set();
+        this.col[c].lastClicked = null;
+      }
+    },
+
+    onClick(srcCol, event, index) {
+      for (const c of this._affectedCols(srcCol)) {
+        const s = this.col[c];
+        if (event.shiftKey && s.lastClicked !== null) {
+          const lo = Math.min(s.lastClicked, index), hi = Math.max(s.lastClicked, index);
+          const next = new Set();
+          for (let i = lo; i <= hi; i++) next.add(i);
+          s.selected = next;
+        } else if (event.metaKey || event.ctrlKey) {
+          s.selected.has(index) ? s.selected.delete(index) : s.selected.add(index);
+          s.lastClicked = index;
+        } else if (s.selected.size === 1 && s.selected.has(index)) {
+          s.selected = new Set();
+          s.lastClicked = null;
+        } else {
+          s.selected = new Set([index]);
+          s.lastClicked = index;
+        }
+      }
+    },
+
+    onDragStart(srcCol, event, index) {
+      for (const c of this._affectedCols(srcCol)) {
+        const s = this.col[c];
+        if (!s.selected.has(index)) {
+          s.selected = new Set([index]);
+          s.lastClicked = index;
+        }
+        s.dragIndex = index;
+      }
+      if (!this.locked) this.imagesDecoupled = true;
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', this.col[srcCol].selected.size + ' page(s)');
+    },
+
+    onDragOver(srcCol, event) {
+      const row = event.target.closest('[data-index]');
+      if (!row || this.col[srcCol].dragIndex === null) return;
+      const index = parseInt(row.dataset.index, 10);
+      this.col[srcCol].selected.has(index) ? this._clearHighlight() : this._setHighlight(srcCol, index);
+      event.dataTransfer.dropEffect = 'move';
+    },
+
+    onDragLeave(srcCol, event) {
+      const list = this.$refs[srcCol + 'List'];
+      if (list && !list.contains(event.relatedTarget)) this._clearHighlight();
+    },
+
+    onDragEnd(srcCol) {
+      this._clearHighlight();
+      for (const c of this._affectedCols(srcCol)) this.col[c].dragIndex = null;
+    },
+
+    onDrop(srcCol, event) {
+      const row = event.target.closest('[data-index]');
+      this._clearHighlight();
+      if (!row) return;
+      const index = parseInt(row.dataset.index, 10);
+      for (const c of this._affectedCols(srcCol)) {
+        const s = this.col[c];
+        if (s.dragIndex === null || s.selected.has(index)) continue;
+        const sel = [...s.selected].sort((a, b) => a - b);
+        const moved = sel.map(i => s.items[i]);
+        for (let i = sel.length - 1; i >= 0; i--) s.items.splice(sel[i], 1);
+        const insertAt = Math.max(0, Math.min(index - sel.filter(i => i < index).length, s.items.length));
+        s.items.splice(insertAt, 0, ...moved);
+        s.selected = new Set(moved.map((_, i) => insertAt + i));
+        s.lastClicked = insertAt;
+        s.dragIndex = null;
+      }
+    },
+
+    async save() {
+      this.saving = true;
+      this.saveStatus = '';
+      const payload = { page_ids: this.col.text.items.map(p => p.id) };
+      if (this.imagesDecoupled) payload.image_uuids = this.col.image.items.map(p => p.uuid);
+      try {
+        const r = await fetch(window.location.href, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await r.json();
+        this.saveOk = r.ok && data.ok;
+        this.saveStatus = this.saveOk ? 'Order saved.' : (data.error || 'Failed to save.');
+      } catch (e) {
+        this.saveOk = false;
+        this.saveStatus = 'Request failed.';
+      }
+      this.saving = false;
+    }
+  };
+}
+</script>
+{% endblock %}

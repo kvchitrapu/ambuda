@@ -1,6 +1,6 @@
 """Models for discussion forums."""
 
-from datetime import datetime
+from datetime import datetime, UTC
 
 from sqlalchemy import Column, DateTime, String
 from sqlalchemy import Text as Text_
@@ -15,7 +15,6 @@ def string():
 
 
 class Board(Base):
-
     """A list of threads."""
 
     __tablename__ = "discussion_boards"
@@ -33,9 +32,11 @@ class Board(Base):
         "Post", order_by=lambda: Post.created_at.desc(), backref="board"
     )
 
+    def __str__(self) -> str:
+        return self.title
+
 
 class Thread(Base):
-
     """A list of posts."""
 
     __tablename__ = "discussion_threads"
@@ -49,7 +50,9 @@ class Thread(Base):
     #: The author of this thread.
     author_id = foreign_key("users.id")
     #: Timestamp at which this thread was created.
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(
+        DateTime, default=lambda: datetime.now(UTC).replace(tzinfo=None), nullable=False
+    )
     #: Timestamp at which this thread was updated.
     updated_at = Column(DateTime, default=same_as("created_at"), nullable=False)
 
@@ -58,9 +61,11 @@ class Thread(Base):
     #: Posts, oldest first.
     posts = relationship("Post", order_by=lambda: Post.created_at, backref="thread")
 
+    def __str__(self) -> str:
+        return self.title
+
 
 class Post(Base):
-
     """A post."""
 
     __tablename__ = "discussion_posts"
@@ -75,7 +80,9 @@ class Post(Base):
     #: The author of this post.
     author_id = foreign_key("users.id")
     #: Timestamp at which this post was created.
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(
+        DateTime, default=lambda: datetime.now(UTC).replace(tzinfo=None), nullable=False
+    )
     #: Timestamp at which this post was updated (e.g. during an edit).
     updated_at = Column(DateTime, default=same_as("created_at"), nullable=False)
 
@@ -88,4 +95,4 @@ class Post(Base):
     def update_content(self, new_content: str):
         """Update the post's content and its timestamp."""
         self.content = new_content
-        self.updated_at = datetime.utcnow()
+        self.updated_at = datetime.now(UTC).replace(tzinfo=None)

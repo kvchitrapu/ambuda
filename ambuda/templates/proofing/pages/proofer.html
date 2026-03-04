@@ -1,0 +1,797 @@
+{% extends 'header-main-footer.html' %}
+{% import "macros/proofing.html" as m %}
+{% import "macros/components.html" as mc %}
+
+{% block extra_scripts %}<script defer src="{{ asset('gen/proofing.js') }}"></script>{% endblock %}
+
+{# Render a radiobutton as a clickable button. #}
+{% macro _status(field, peer_classes) %}
+{# Use wrapping div so that we can use the Tailwind "peer" class. #}
+<div>
+  {{ field(class_="hidden peer") }}
+  {{ field.label(class_="block border rounded p-2 mr-4
+  text-slate-700 border-slate-300 hover:bg-slate-300 "
+  + peer_classes
+  + " peer-checked:font-bold cursor-pointer") }}
+</div>
+{% endmacro %}
+
+
+{% set button_css = "block p-1 px-2 hover:bg-slate-700" %}
+{% macro _dropdown_button(slug, name) %}
+<button class="{{ button_css }}"
+   @mousedown.prevent="toggleMenu('{{ slug }}')"
+   @mouseenter="hoverMenu('{{ slug }}')">{{ name }}</button>
+{% endmacro %}
+
+{% macro _dropdown_pane(slug) %}
+<div x-show="activeMenu === '{{ slug }}'" @mousedown.outside="activeMenu = null" class="dropdown-pane w-48">
+  <ul class="text-sm" @click.prevent="activeMenu = null">
+    {{ caller() }}
+  </ul>
+</div>
+{% endmacro %}
+
+{% macro _dropdown_item(fn, text) -%}
+<li><button class="dropdown-item" @mouseup.prevent="{{ fn }}">{{ text|safe }}</button></li>
+{%- endmacro %}
+
+
+{% macro _dropdown_separator() %}
+<li class="border-t border-slate-700 my-1"></li>
+{% endmacro %}
+
+
+{% macro _latin_char_row(chars, class) %}
+<div class="grid {{ class }}">
+{%- for char in chars.split() %}
+  <button class="hover:bg-sky-500 rounded p-1">{{ char.upper()|safe }}</button>
+  <button class="hover:bg-sky-500 rounded p-1">{{ char|safe }}</button>
+{%- endfor %}
+</div>
+{% endmacro %}
+
+
+{% macro _devanagari_char_row(chars, class) %}
+<div class="text-xl grid deva-serif {{ class }}">
+{% for char in chars.split() %}
+  <button class="hover:bg-sky-500 rounded p-1">{{ char|safe }}</button>
+{% endfor %}
+</div>
+{% endmacro %}
+
+
+{% block title %}Edit: {{ project.display_title }}/{{ cur.slug }} | Ambuda{% endblock %}
+
+{% block header %}{% endblock %}
+{% block footer %}{% endblock %}
+{% block main %}
+<style>
+  [x-cloak] { display: none !important; }
+  .split-handle {
+    position: relative;
+    flex-shrink: 0;
+    z-index: 1;
+    box-sizing: content-box;
+    background: #cbd5e1;
+    background-clip: content-box;
+  }
+  .split-handle-h { width: 1px; padding: 0 4px; margin: 0 -4px; cursor: col-resize; }
+  .split-handle-v { height: 1px; padding: 4px 0; margin: -4px 0; cursor: row-resize; }
+  .split-handle::after {
+    content: '';
+    position: absolute;
+    background: #94a3b8;
+    border-radius: 9999px;
+    opacity: 0;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+  }
+  .split-handle:hover::after { opacity: 1; }
+  .split-handle-h::after { width: 5px; height: 32px; }
+  .split-handle-v::after { height: 5px; width: 32px; }
+  .mark-btn::before { content: none !important; }
+  .mark-tooltip { display: none; }
+  .mark-btn:hover .mark-tooltip { display: block; }
+  .ime-popup {
+    position: fixed;
+    background: oklch(68.5% 0.169 237.323);
+    color: white;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 1.1rem;
+    pointer-events: none;
+    z-index: 100;
+    white-space: nowrap;
+  }
+</style>
+{# Loading overlay shown while Alpine.js initializes #}
+<div id="editor-loading" class="h-screen flex items-center justify-center bg-slate-50">
+  <div class="text-center">
+    <div class="text-lg text-slate-600 mb-2">{{ _('Loading editor...') }}</div>
+    <div class="text-sm text-slate-400">{{ _('Please wait') }}</div>
+  </div>
+</div>
+
+<div class="h-screen flex flex-col overflow-hidden"
+     x-data="proofer"
+     x-init="document.getElementById('editor-loading').style.display = 'none'"
+     x-cloak
+     @keydown.window="if (($event.metaKey || $event.ctrlKey) && $event.key === 'k') { $event.preventDefault(); openCommandPalette(); }"
+     data-page-state='{{ page_state|tojson }}'
+     >
+
+  {# Command menu: edit, view, tools, ... #}
+  {% set button_css = "block p-1 px-2 hover:bg-slate-700" %}
+  <nav class="bg-slate-900 text-white text-sm flex justify-between px-2" x-data="{
+    activeMenu: null,
+    toggleMenu(name) { this.activeMenu = (this.activeMenu === name ? null : name) },
+    hoverMenu(name) { if (this.activeMenu) this.activeMenu = name }
+  }">
+    {# Left-aligned (standard commands) #}
+    <div class="flex">
+
+    <div class="relative">
+      {{ _dropdown_button('proofing', _('Proofing')) }}
+      <div x-show="activeMenu === 'proofing'" @mousedown.outside="activeMenu = null" class="dropdown-pane w-48">
+        <a class="dropdown-item" href="{{ url_for('proofing.dashboard') }}">{{ _('Dashboard') }}</a>
+        <a class="dropdown-item" href="{{ url_for('proofing.index') }}">{{ _('All projects') }}</a>
+        <a class="dropdown-item" href="{{ url_for('proofing.texts') }}">{{ _('All texts') }}</a>
+      </div>
+    </div>
+
+    <div class="relative">
+      {{ _dropdown_button('project', _('Project')) }}
+      <div x-show="activeMenu === 'project'" @mousedown.outside="activeMenu = null" class="dropdown-pane w-48">
+        <a class="dropdown-item" href="{{ url_for('proofing.project.summary', slug=project.slug) }}">{{ _('Index') }}</a>
+        <a class="dropdown-item" href="{{ url_for('proofing.project.edit', slug=project.slug) }}">{{ _('Edit') }}</a>
+        {% if current_user.is_authenticated %}
+        <a class="dropdown-item" href="{{ url_for('proofing.project.download_as_project_xml', slug=project.slug) }}">{{ _('Export XML') }}</a>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="relative">
+      {{ _dropdown_button('page', _('Page')) }}
+      {% call _dropdown_pane('page') %}
+        {{ _dropdown_item('copyPageXML', _('Copy page XML')) }}
+      {% endcall %}
+    </div>
+
+    <div class="relative">
+      {{ _dropdown_button('edit', _('Edit')) }}
+      {% call _dropdown_pane('edit') %}
+        {{ _dropdown_item('undo', _('Undo')) }}
+        {{ _dropdown_item('redo', _('Redo')) }}
+        {{ _dropdown_separator() }}
+        {{ _dropdown_item('insertBlock', _('Insert block')) }}
+        {{ _dropdown_item('deleteBlock', _('Delete active block')) }}
+        {{ _dropdown_item('moveBlockUp', _('Move block up')) }}
+        {{ _dropdown_item('moveBlockDown', _('Move block down')) }}
+        {{ _dropdown_item('mergeBlockUp', _('Merge block up')) }}
+        {{ _dropdown_item('mergeBlockDown', _('Merge block down')) }}
+        {{ _dropdown_separator() }}
+        {{ _dropdown_item('toggleMarkToolbar()', _('Mark as ...')) }}
+      {% endcall %}
+    </div>
+
+    <div class="relative">
+      {{ _dropdown_button('view', _('View')) }}
+      {% call _dropdown_pane('view') %}
+        {{ _dropdown_item('openCommandPalette', _('Command palette')) }}
+        {{ _dropdown_separator() }}
+        {{ _dropdown_item('displayImageOnLeft', _('Show image on left')) }}
+        {{ _dropdown_item('displayImageOnRight', _('Show image on right')) }}
+        {{ _dropdown_item('displayImageOnTop', _('Show image on top')) }}
+        {{ _dropdown_item('displayImageOnBottom', _('Show image on bottom')) }}
+        {{ _dropdown_separator() }}
+        {{ _dropdown_item('displayVisualView', _('Switch to visual editor')) }}
+        {{ _dropdown_item('displayXMLView', _('Switch to XML editor')) }}
+        {{ _dropdown_separator() }}
+        <li>
+          <button class="dropdown-item" @click.prevent="toggleInvertImageColors">
+            <span x-show="invertImageColors" class="inline-block w-4">&#x2713;</span>
+            <span x-show="!invertImageColors" class="inline-block w-4"></span>
+            {{ _('Invert image colors') }}
+          </button>
+        </li>
+        <li>
+          <button class="dropdown-item" @click.prevent="toggleTrackBoundingBox">
+            <span x-show="trackBoundingBox" class="inline-block w-4">&#x2713;</span>
+            <span x-show="!trackBoundingBox" class="inline-block w-4"></span>
+            {{ _('Track bounding box') }}
+          </button>
+        </li>
+        {{ _dropdown_separator() }}
+        <li>
+          <button class="dropdown-item" @click.prevent="toggleAdvancedOptions">
+            <span x-show="!showAdvancedOptions">{{ _('Show advanced options') }}</span>
+            <span x-show="showAdvancedOptions">{{ _('Hide advanced options') }}</span>
+          </button>
+        </li>
+      {% endcall %}
+    </div>
+
+    <div class="relative">
+      {{ _dropdown_button('tools', _('Tools')) }}
+      {% call _dropdown_pane('tools') %}
+        <li>
+          <button class="dropdown-item"
+                  @click.prevent="runOCR"
+                  :disabled="isRunningOCR"
+                  x-text="isRunningOCR ? '{{ _("Running OCR ...") }}' : '{{ _("Run OCR") }}'">
+          </button>
+        </li>
+        {% if current_user is defined and current_user.is_authenticated and current_user.is_p2 %}
+        <li>
+          <button class="dropdown-item"
+                  @click.prevent="runLLMStructuring"
+                  :disabled="isRunningLLMStructuring"
+                  x-text="isRunningLLMStructuring ? '{{ _("Running LLM Structuring ...") }}' : '{{ _("Run LLM Structuring") }}'">
+          </button>
+        </li>
+        {% endif %}
+        {{ _dropdown_item('openNormalizeModal', _('Normalize...')) }}
+        {{ _dropdown_item('openTransliterateModal', _('Transliterate...')) }}
+        {{ _dropdown_item('openAutoStructureModal', _('Auto-structure...')) }}
+        {{ _dropdown_separator() }}
+        <li>
+          <button class="dropdown-item" @click.prevent="toggleIME">
+            <span x-show="imeEnabled" class="inline-block w-4">&#x2713;</span>
+            <span x-show="!imeEnabled" class="inline-block w-4"></span>
+            {{ _('Transliterator IME') }}
+          </button>
+        </li>
+      {% endcall %}
+    </div>
+
+    <div class="relative">
+       {# i18n: Selection menu for Unicode character in proofing editor. #}
+      {{ _dropdown_button('characters', _('Characters')) }}
+      <div x-show="activeMenu === 'characters'" @mousedown.outside="activeMenu = null" class="p-2 dropdown-pane w-60" @click.prevent="copyCharacter">
+        <p class="text-xs text-center mb-2">{{ _('Click a character to copy it.') }}</p>
+        <ul class="text-center">
+          {{ _latin_char_row('ā á â à', 'grid-cols-8') }}
+          {{ _latin_char_row('ī í î ì', 'grid-cols-8') }}
+          {{ _latin_char_row('ū ú û ù', 'grid-cols-8') }}
+          {{ _latin_char_row('ṛ ṝ ḷ ḹ', 'grid-cols-8') }}
+          {{ _latin_char_row('ē é ê è', 'grid-cols-8') }}
+          {{ _latin_char_row('ō ó ô ò', 'grid-cols-8') }}
+          {{ _latin_char_row('ḥ ṁ ṃ', 'grid-cols-6') }}
+          {{ _latin_char_row('ṅ ñ ṇ', 'grid-cols-6') }}
+          {{ _latin_char_row('ṭ ḍ ś ṣ ç', 'grid-cols-10') }}
+          {{ _devanagari_char_row('&#x0964; &#x0965; &#x093d; &#x0970; &#xa8f2; &#xa8f3;',
+              'grid-cols-6') }}
+          {{ _devanagari_char_row('&#x25cc;&#x0952; &#x25cc;&#x0951; &#x1cf5; &#x1cf6;',
+              'grid-cols-4') }}
+        </ul>
+      </div>
+    </div>
+
+    {% set history_url = url_for("proofing.page.history", project_slug=project.slug, page_slug=page_context.cur.slug) %}
+    <div class="relative">
+      {{ _dropdown_button('history', pgettext('editor', 'History')) }}
+      {% call _dropdown_pane('history') %}
+        {{ _dropdown_item('openHistoryModal', _('Show all history')) }}
+      {% endcall %}
+    </div>
+
+    <div class="relative">
+      {{ _dropdown_button('help', pgettext('editor', 'Help')) }}
+      <div x-show="activeMenu === 'help'" @mousedown.outside="activeMenu = null" class="dropdown-pane w-48">
+        <a href="{{ url_for("proofing.guidelines") }}" target="_blank" class="dropdown-item">
+          {{ _('Proofing guidelines') }}
+        </a>
+      </div>
+    </div>
+    </div>
+
+    {# Right-aligned (username, sign in) #}
+    <div>
+      {% if current_user.is_authenticated %}
+      {% set name = current_user.username %}
+      <div class="relative">
+        {{ _dropdown_button('user', name) }}
+        <div x-show="activeMenu === 'user'" @mousedown.outside="activeMenu = null" class="dropdown-pane w-60 right-0">
+          <a href="{{ url_for("user.summary", username=name) }}" class="dropdown-item">
+            {{ _('Profile') }}
+          </a>
+          <a href="{{ url_for("auth.sign_out") }}" class="dropdown-item">
+            {{ _('Sign out') }}
+          </a>
+        </div>
+      </div>
+      {% else %}
+        <a href="{{ url_for("auth.sign_in") }}" class="{{ button_css }}">{{ _('Sign in') }}</a>
+      {% endif %}
+    </div>
+  </nav>
+
+  {# Unified menu bar: project info, image controls, text controls #}
+  <div class="flex-shrink-0 bg-slate-300 border-b text-sky-900 text-sm">
+    <div class="flex items-center justify-between p-2 gap-4">
+      {# Left side: Project info and page status #}
+      <div class="flex-shrink-0">
+        <div class="mb-1">
+          <a class="block font-bold hover:underline" href="{{ url_for("proofing.project.summary", slug=project.slug) }}">
+            {{ project.display_title }}
+          </a>
+          <div class="text-slate-600 text-xs">
+            Page <span x-text="pageState.pageNumber"></span>
+            (image <span x-text="pageState.imageNumber"></span> of <span x-text="pageState.numPages"></span>)
+          </div>
+        </div>
+      </div>
+
+      {# Middle panel: image and text controls #}
+      <div class="flex items-center gap-3 flex-1">
+        <div class="flex items-center gap-2">
+          <span class="p-1 rounded text-xs" :class="statusBadgeClasses()" x-text="statusLabel()"></span>
+        </div>
+
+        <div class="border border-slate-300 rounded-full px-3 py-1 bg-slate-50">
+          <div class="flex items-center gap-1">
+            <button type="button" class="p-1 hover:bg-slate-200 rounded" @click="increaseTextSize()" title="{{ _('Increase text size') }}">A<sup>+</sup></button>
+            <button type="button" class="p-1 hover:bg-slate-200 rounded" @click="resetTextSize()" title="{{ _('Reset text size') }}">A<sup>&#x00b0;</sup></button>
+            <button type="button" class="p-1 hover:bg-slate-200 rounded" @click="decreaseTextSize()" title="{{ _('Decrease text size') }}">A<sup>-</sup></button>
+          </div>
+        </div>
+
+        <div class="border border-slate-300 rounded-full px-3 py-1 bg-slate-50">
+          <div class="flex items-center gap-1">
+            <button type="button" class="p-1 hover:bg-slate-200 rounded" @click="increaseImageZoom" title="{{ _('Zoom in') }}">&#x1f50d;<sup>+</sup></button>
+            <button type="button" class="p-1 hover:bg-slate-200 rounded" @click="resetImageZoom" title="{{ _('Reset zoom') }}">&#x1f50d;&#x00b0;</button>
+            <button type="button" class="p-1 hover:bg-slate-200 rounded" @click="decreaseImageZoom" title="{{ _('Zoom out') }}">&#x1f50d;<sup>-</sup></button>
+            <button type="button" class="p-1 hover:bg-slate-200 rounded" @click="fitImageWidth" title="{{ _('Fit width to container') }}">&#x2194;</button>
+            <button type="button" class="p-1 hover:bg-slate-200 rounded" @click="fitImageHeight" title="{{ _('Fit height to container') }}">&#x2195;</button>
+            <button type="button" id="osd-rotate-left" class="p-1 hover:bg-slate-200 rounded" title="{{ _('Rotate left') }}">&#x27f2;</button>
+            <button type="button" id="osd-rotate-right" class="p-1 hover:bg-slate-200 rounded" title="{{ _('Rotate right') }}">&#x27f3;</button>
+          </div>
+        </div>
+      </div>
+
+      {# Right side: Navigation and auth #}
+      <div class="flex items-center space-x-4 flex-shrink-0">
+        <div class="flex items-center gap-2">
+          <a class="p-2 rounded hover:bg-slate-400"
+             :href="pageState.prevSlug ? '/proofing/' + pageState.projectSlug + '/' + pageState.prevSlug + '/' : null"
+             :class="(!pageState.prevSlug || isNavigating) ? 'opacity-30 pointer-events-none' : ''"
+             @click.prevent="goToPrev">&larr;</a>
+          <a class="p-2 rounded hover:bg-slate-400"
+             :href="pageState.nextSlug ? '/proofing/' + pageState.projectSlug + '/' + pageState.nextSlug + '/' : null"
+             :class="(!pageState.nextSlug || isNavigating) ? 'opacity-30 pointer-events-none' : ''"
+             @click.prevent="goToNext">&rarr;</a>
+          <button class="btn btn-submit px-3 py-1.5"
+                  type="button"
+                  :disabled="isSaving"
+                  @click="openSubmitModal"
+                  x-text="isSaving ? '{{ _("Saving...") }}' : (pageState.canSaveDirectly ? '{{ _("Save") }}' : '{{ _("Suggest") }}')">
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div x-show="showMarkToolbar" class="bg-slate-200 border-b px-2 py-1 flex flex-wrap gap-0.5 text-sm items-center">
+    <template x-for="(group, gi) in markGroups" :key="group.key">
+      <div class="flex items-center gap-0.5">
+        <div x-show="gi > 0" class="w-px h-5 bg-slate-400 mx-1"></div>
+        <span class="text-[10px] text-slate-500 mr-0.5" x-text="group.label"></span>
+        <template x-for="mark in marksForGroup(group.key)" :key="mark.name">
+          <button type="button"
+                  class="mark-btn relative rounded w-8 py-0.5 text-center"
+                  style="border: 1px solid rgba(0,0,0,0.1)"
+                  :class="mark.className"
+                  @mousedown.prevent="toggleMark(mark.name)">
+            <span x-text="mark.emoji"></span>
+            <span class="mark-tooltip absolute bottom-full left-1/2 -translate-x-1/2 mb-1 px-2 py-0.5 bg-slate-900 text-white text-xs rounded whitespace-nowrap pointer-events-none z-20"
+                  x-text="mark.label"></span>
+          </button>
+        </template>
+      </div>
+    </template>
+  </div>
+
+  {% if not current_user.is_authenticated -%}
+  {% set url = url_for('auth.register') %}
+  <div class="px-4 py-2 bg-yellow-100 border-b">
+    {% trans %}
+    Since you are not logged in, some functions (such as the OCR button) have
+    been disabled. To use all website features, please <a class="underline"
+    href="{{ url }}">create an account</a>.
+    {% endtrans %}
+  </div>
+  {%- endif %}
+
+  {{ mc.flash_messages() }}
+
+  {# Inline alert for AJAX feedback #}
+  <div x-show="alertVisible" x-cloak x-transition
+       class="px-4 py-2 border-b text-sm flex justify-between items-center"
+       :class="{
+         'bg-green-100 text-green-800': alertType === 'success',
+         'bg-red-100 text-red-800': alertType === 'error',
+         'bg-yellow-100 text-yellow-800': alertType === 'warning',
+         'bg-blue-100 text-blue-800': alertType === 'info'
+       }">
+    <span x-text="alertMessage"></span>
+    <button type="button" class="font-bold ml-4 hover:opacity-70" @click="dismissAlert">&times;</button>
+  </div>
+
+  {# Navigation loading indicator #}
+  <div x-show="isNavigating" x-cloak class="h-1 bg-blue-500 animate-pulse"></div>
+
+  {# Unsaved changes warning #}
+  <div x-show="showUnsavedWarning" x-cloak
+       class="px-4 py-3 bg-amber-50 border-b border-amber-200 text-sm flex items-center justify-between">
+    <span class="text-amber-800">{{ _('You have unsaved changes. Discard them and navigate away?') }}</span>
+    <div class="flex gap-2">
+      <button type="button"
+              class="px-3 py-1 border border-slate-300 rounded hover:bg-slate-200 text-sm"
+              @click="cancelNavigation">{{ _('Stay') }}</button>
+      <button type="button"
+              class="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-sm"
+              @click="confirmDiscardAndNavigate">{{ _('Discard') }}</button>
+    </div>
+  </div>
+
+  {% if conflict %}
+  <div class="px-4 py-2 bg-slate-100 border-b">
+    <pre class="p-2">{{ conflict.content }}</pre>
+  </div>
+  {% endif %}
+
+  <div x-show="!pageState.hasEdits" class="px-4 py-2 bg-blue-100 border-b text-xs">
+    {% set command = _("Tools &rarr; Run OCR") %}
+    {% trans %}
+    This page has not been edited yet. Run <i>{{ command }}</i> to get started.
+    {% endtrans %}
+  </div>
+
+  <div x-show="isRunningOCR || isRunningLLMStructuring || isRunningStructuring"
+       class="bg-blue-100 border-b text-blue-700 px-4 py-2 text-sm"
+       role="alert">
+    <span x-show="isRunningOCR">{{ _('Running OCR ...') }}</span>
+    <span x-show="isRunningLLMStructuring">{{ _('Running LLM structuring ...') }}</span>
+    <span x-show="isRunningStructuring">{{ _('Running structuring ...') }}</span>
+  </div>
+
+  <div x-show="xmlParseError"
+       class="bg-red-100 border-b text-red-700 px-4 py-2 text-sm flex justify-between items-center"
+       role="alert">
+    <span x-text="xmlParseError"></span>
+    <button type="button"
+            class="text-red-700 hover:text-red-900 font-bold ml-4"
+            @click="xmlParseError = null">&times;</button>
+  </div>
+
+  <form method="POST" class="flex-1 flex flex-col min-h-0" @submit.prevent="submitForm">
+    {{ form.csrf_token }}
+    <input type="hidden" name="version" value="{{ page_state.version }}">
+    <input type="hidden" name="summary" value="">
+    <input type="hidden" name="status" value="{{ page_state.status }}">
+    <input type="hidden" name="explanation" value="">
+
+    <div :class="layoutClasses" class="flex-1 min-h-0" x-ref="splitContainer">
+      <div :style="'flex: ' + splitPercent + ' 1 0%'" class="flex flex-col min-h-0 overflow-hidden">
+        <div class="border border-r-slate-400 flex flex-col min-h-0 h-full">
+          <div class="p-2 md:p-4 flex-1 min-h-0 overflow-y-scroll">
+            <div id="prosemirror-editor" class="prosemirror-editor"></div>
+            <textarea id="content" name="content" required="" style="display: none;">{{ form.content.data }}</textarea>
+          </div>
+        </div>
+      </div>
+      <div class="split-handle"
+           :class="isHorizontalLayout() ? 'split-handle-h' : 'split-handle-v'"
+           @mousedown.prevent="startResize()"
+           @dblclick="resetSplit()"></div>
+      <div :style="'flex: ' + (100 - splitPercent) + ' 1 0%'" class="flex flex-col min-h-0 overflow-hidden">
+        <div class="flex flex-col min-h-0 h-full border bg-slate-100">
+          <div id="osd-image" class="flex-1 min-h-0" :style="invertImageColors ? 'filter: invert(1)' : ''">
+          </div>
+        </div>
+      </div>
+    </div>
+  </form>
+
+  <div x-show="activeModal === 'command-palette'"
+       x-cloak
+       @click.self="closeModal"
+       @keydown.window.escape="closeModal"
+       class="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center pt-20 z-50">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-lg overflow-hidden text-sm">
+      <input id="command-palette-input"
+             type="text"
+             :value="commandPaletteQuery"
+             @input="updateCommandPaletteQuery($event.target.value)"
+             @keydown="handleCommandPaletteKeydown"
+             placeholder="Search commands ..."
+             class="w-full p-3 focus:outline-none">
+      <div class="max-h-96 overflow-y-scroll">
+        <template x-for="(cmd, index) in getFilteredCommands()" :key="index">
+          <button type="button"
+                  @click="executeCommand(index)"
+                  :class="index === commandPaletteSelected ? 'bg-blue-100' : 'hover:bg-slate-50'"
+                  class="flex w-full text-left p-3 items-center justify-between">
+            <span x-text="cmd.label"></span>
+            <span x-show="cmd.code" class="text-xs text-slate-400 ml-4">
+              <span x-show="cmd.code && cmd.code.startsWith(commandPaletteQuery.toLowerCase()) && commandPaletteQuery.length > 0"
+                    x-text="cmd.code?.slice(0, commandPaletteQuery.length)"
+                    class="font-bold text-blue-500"></span><span
+                    x-text="cmd.code && cmd.code.startsWith(commandPaletteQuery.toLowerCase()) && commandPaletteQuery.length > 0 ? cmd.code?.slice(commandPaletteQuery.length) : cmd.code"></span>
+            </span>
+          </button>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <div x-show="activeModal === 'history'"
+       x-cloak
+       @click.self="closeModal"
+       @keydown.window.escape="closeModal"
+       class="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center pt-20 z-50">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl overflow-hidden">
+      <div class="bg-slate-100 p-4 border-b flex justify-between items-center">
+        <h2 class="text-lg font-bold">{{ _('Revision history') }}</h2>
+        <button type="button"
+                class="text-slate-700 hover:text-slate-900 font-bold text-xl"
+                @click="closeModal">&times;</button>
+      </div>
+      <div class="p-4 max-h-96 overflow-y-scroll">
+        <div x-show="historyLoading" class="text-center py-4">{{ _('Loading...') }}</div>
+        <div x-show="!historyLoading && historyRevisions.length === 0" class="text-center py-4 text-slate-500">
+          {{ _('There are no revisions for this page.') }}
+        </div>
+        <ul x-show="!historyLoading && historyRevisions.length > 0" class="a-hover-underline">
+          <template x-for="r in historyRevisions" :key="r.id">
+            <li class="my-2 text-sm">
+              <span :class="getRevisionColorClass(r.status)" class="inline-block w-2 h-2 mr-0.5 rounded-full"></span>
+              <a :href="r.revision_url" class="text-slate-400" x-text="r.created"></a>
+              by <a :href="r.author_url" x-text="r.author"></a>
+              <i x-show="r.summary" x-text="'(' + r.summary + ')'"></i>
+            </li>
+          </template>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div x-show="activeModal === 'submit'"
+       x-cloak
+       @click.self="closeModal"
+       @keydown.window.escape="closeModal"
+       class="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center pt-20 z-50">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-3xl overflow-hidden">
+      <div class="bg-slate-100 p-4 border-b flex justify-between items-center">
+        <h2 class="text-lg font-bold" x-text="pageState.canSaveDirectly ? '{{ _("Save changes") }}' : '{{ _("Submit suggestion") }}'"></h2>
+        <button type="button"
+                class="text-slate-700 hover:text-slate-900 font-bold text-xl"
+                @click="closeModal">&times;</button>
+      </div>
+      <div class="p-4 max-h-[60vh] overflow-y-scroll">
+        <div class="mb-4">
+          <h3 class="text-sm font-semibold text-slate-700 mb-2">{{ _('Changes made:') }}</h3>
+          <div class="bg-slate-50 border border-slate-300 rounded p-3 text-sm font-mono max-h-48 overflow-y-auto whitespace-pre-wrap" x-html="changesPreview"></div>
+        </div>
+
+        <div x-show="pageState.canSaveDirectly" class="flex gap-4 items-end">
+          <div class="flex-1">
+            {{ form.summary.label(class_="text-slate-600 mb-1 block text-sm") }}
+            <input type="text"
+                   x-model="modalSummary"
+                   class="block rounded bg-white w-full p-2 border border-slate-300"
+                   placeholder="{{ _('Fixed various OCR errors') }}">
+          </div>
+
+          <div class="flex-1">
+            {{ form.status.label(class_="block text-slate-600 mb-1 text-sm") }}
+            <select x-model="modalStatus"
+                    :class="{
+                      'bg-red-200 text-red-800 border-red-300': modalStatus === 'reviewed-0',
+                      'bg-yellow-200 text-yellow-800 border-yellow-300': modalStatus === 'reviewed-1',
+                      'bg-green-200 text-green-800 border-green-300': modalStatus === 'reviewed-2',
+                      'bg-slate-100 text-gray-800 border-gray-300': modalStatus === 'skip'
+                    }"
+                    class="block w-full p-2 rounded border-2 transition-colors">
+              {% set radios = form.status|list %}
+              <option value="{{ radios[0].data }}">{{ radios[0].label.text }}</option>
+              <option value="{{ radios[1].data }}">{{ radios[1].label.text }}</option>
+              <option x-show="!pageState.isR0" value="{{ radios[2].data }}">{{ radios[2].label.text }}</option>
+              <option value="{{ radios[3].data }}">{{ radios[3].label.text }}</option>
+            </select>
+          </div>
+        </div>
+        <div x-show="!pageState.canSaveDirectly">
+          <label class="text-slate-600 mb-1 block text-sm">{{ _('Explanation (optional)') }}</label>
+          <input type="text"
+                 x-model="modalExplanation"
+                 class="block rounded bg-white w-full p-2 border border-slate-300"
+                 placeholder="{{ _('Describe what you changed and why') }}">
+        </div>
+
+        {% set cc0 = "https://creativecommons.org/publicdomain/zero/1.0/" %}
+        <p class="mt-4 text-xs text-slate-600">{% trans %}
+        By saving your changes, you agree to release your contribution under the
+        <a class="underline" href="{{ cc0 }}">CC0 (public domain) license</a>.
+        {% endtrans %}</p>
+      </div>
+
+      <div class="bg-slate-100 p-4 border-t flex items-center justify-between">
+        <label x-show="pageState.canSaveDirectly && pageState.nextSlug"
+               class="flex items-center gap-2 cursor-pointer text-sm text-slate-600">
+          <input type="checkbox" class="w-4 h-4"
+                 x-model="advanceAfterSubmit"
+                 @change="saveSettings()">
+          {{ _('After submit, take me to the next page') }}
+        </label>
+        <span x-show="!(pageState.canSaveDirectly && pageState.nextSlug)"></span>
+        <div class="flex gap-3">
+          <button type="button"
+                  class="px-4 py-2 border border-slate-300 rounded hover:bg-slate-200"
+                  @click="closeModal">
+            {{ _('Cancel') }}
+          </button>
+          <button type="button"
+                  class="btn btn-submit"
+                  :disabled="isSaving"
+                  @click="submitFormFromModal"
+                  x-text="isSaving ? '{{ _("Saving...") }}' : (pageState.canSaveDirectly ? '{{ _("Submit") }}' : '{{ _("Submit suggestion") }}')">
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div x-show="activeModal === 'normalize'"
+       x-cloak
+       @click.self="closeModal"
+       @keydown.window.escape="closeModal"
+       class="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center pt-20 z-50">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-md overflow-hidden">
+      <div class="bg-slate-100 p-4 border-b flex justify-between items-center">
+        <h2 class="text-lg font-bold">{{ _('Normalize Text') }}</h2>
+        <button type="button"
+                class="text-slate-700 hover:text-slate-900 font-bold text-xl"
+                @click="closeModal">&times;</button>
+      </div>
+      <div class="p-4">
+        <p class="text-sm text-slate-600 mb-4">{{ _('Select the normalizations to apply to the selected text:') }}</p>
+
+        <div class="space-y-3">
+          <label class="flex items-center gap-2 cursor-pointer hover:bg-slate-50 p-2 rounded">
+            <input type="checkbox" x-model="normalizeReplaceColonVisarga" class="w-4 h-4">
+            <span class="text-sm">{{ _('Replace : (colon) with ः (visarga)') }}</span>
+          </label>
+
+          <label class="flex items-center gap-2 cursor-pointer hover:bg-slate-50 p-2 rounded">
+            <input type="checkbox" x-model="normalizeReplaceSAvagraha" class="w-4 h-4">
+            <span class="text-sm">{{ _('Replace S with ऽ (avagraha)') }}</span>
+          </label>
+
+          <label class="flex items-center gap-2 cursor-pointer hover:bg-slate-50 p-2 rounded">
+            <input type="checkbox" x-model="normalizeReplaceDoublePipe" class="w-4 h-4">
+            <span class="text-sm">{{ _('Replace || with ॥ (double danda)') }}</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="bg-slate-100 p-4 border-t flex justify-end gap-3">
+        <button type="button"
+                class="px-4 py-2 border border-slate-300 rounded hover:bg-slate-200"
+                @click="closeModal">
+          {{ _('Cancel') }}
+        </button>
+        <button type="button"
+                class="btn btn-submit"
+                @click="applyNormalization">
+          {{ _('Normalize') }}
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div x-show="activeModal === 'transliterate'"
+       x-cloak
+       @click.self="closeModal"
+       @keydown.window.escape="closeModal"
+       class="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center pt-20 z-50">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-md overflow-hidden">
+      <div class="bg-slate-100 p-4 border-b flex justify-between items-center">
+        <h2 class="text-lg font-bold">{{ _('Transliterate Text') }}</h2>
+        <button type="button"
+                class="text-slate-700 hover:text-slate-900 font-bold text-xl"
+                @click="closeModal">&times;</button>
+      </div>
+      <div class="p-4">
+        <p class="text-sm text-slate-600 mb-4">{{ _('Transliterate the selected text:') }}</p>
+
+        <div class="space-y-4">
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-2">{{ pgettext('editor', 'From:') }}</label>
+            <select class="w-full p-2 border border-slate-300 rounded" x-model="fromScript">
+              <option value="hk">Harvard-Kyoto ("aGka" &rarr; {{ 'aGka'|d }})</option>
+              <option value="itrans">ITRANS ("a~Nka" &rarr; {{ 'aGka'|d }})</option>
+              <option value="optitrans">OPTITRANS ("anka" &rarr; {{ 'aGka'|d }})</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="block text-sm font-medium text-slate-700 mb-2">{{ pgettext('editor', 'To:') }}</label>
+            <select class="w-full p-2 border border-slate-300 rounded" x-model="toScript">
+              <option value="devanagari">{{ _('Devanagari') }}</option>
+              <option value="iast">{{ _('IAST') }}</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-slate-100 p-4 border-t flex justify-end gap-3">
+        <button type="button"
+                class="px-4 py-2 border border-slate-300 rounded hover:bg-slate-200"
+                @click="closeModal">
+          {{ _('Cancel') }}
+        </button>
+        <button type="button"
+                class="btn btn-submit"
+                @click="applyTransliteration">
+          {{ _('Transliterate') }}
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div x-show="activeModal === 'auto-structure'"
+       x-cloak
+       @click.self="closeModal"
+       @keydown.window.escape="closeModal"
+       class="fixed inset-0 bg-black bg-opacity-50 flex items-start justify-center pt-20 z-50">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-md overflow-hidden">
+      <div class="bg-slate-100 p-4 border-b flex justify-between items-center">
+        <h2 class="text-lg font-bold">{{ _('Auto-structure') }}</h2>
+        <button type="button"
+                class="text-slate-700 hover:text-slate-900 font-bold text-xl"
+                @click="closeModal">&times;</button>
+      </div>
+      <div class="p-4">
+        <p class="text-sm text-slate-600 mb-4">{{ _('Select the elements to automatically structure:') }}</p>
+
+        <div class="space-y-3">
+          <label class="flex items-center gap-2 cursor-pointer hover:bg-slate-50 p-2 rounded">
+            <input type="checkbox" x-model="autoStructureMatchStage" class="w-4 h-4">
+            <span class="text-sm">{{ _('Stage directions (...)') }}</span>
+          </label>
+
+          <label class="flex items-center gap-2 cursor-pointer hover:bg-slate-50 p-2 rounded">
+            <input type="checkbox" x-model="autoStructureMatchSpeaker" class="w-4 h-4">
+            <span class="text-sm">{{ _('Speakers (^.*[-])') }}</span>
+          </label>
+
+          <label class="flex items-center gap-2 cursor-pointer hover:bg-slate-50 p-2 rounded">
+            <input type="checkbox" x-model="autoStructureMatchChaya" class="w-4 h-4">
+            <span class="text-sm">{{ _('Chaya [...]') }}</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="bg-slate-100 p-4 border-t flex justify-end gap-3">
+        <button type="button"
+                class="px-4 py-2 border border-slate-300 rounded hover:bg-slate-200"
+                @click="closeModal">
+          {{ _('Cancel') }}
+        </button>
+        <button type="button"
+                class="btn btn-submit"
+                @click="applyAutoStructure">
+          {{ _('Auto-structure') }}
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/openseadragon@3.1/build/openseadragon/openseadragon.min.js"></script>
+<script type="text/javascript">
+history.replaceState({ pageSlug: "{{ page_state.pageSlug }}" }, "", window.location.href);
+</script>
+{% endblock %}

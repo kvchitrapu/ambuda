@@ -1,0 +1,104 @@
+import dataclasses as dc
+from datetime import datetime, timedelta
+
+from vidyut.lipi import transliterate, Scheme
+
+import ambuda.database as db
+from ambuda import queries as q
+
+
+@dc.dataclass
+class TextEntry:
+    text: db.Text
+    children: list["TextEntry"]
+
+    genre: db.Genre | None
+    author: db.Author | None
+
+
+def create_text_entries() -> list[TextEntry]:
+    texts = q.texts()
+    mula_texts = []
+    child_texts = []
+    for text in texts:
+        is_mula = text.parent_id is None
+        (child_texts, mula_texts)[is_mula].append(text)
+
+    sorted_mula_texts = sorted(
+        mula_texts,
+        key=lambda x: transliterate(x.title, Scheme.HarvardKyoto, Scheme.Devanagari),
+    )
+    sorted_child_texts = sorted(
+        child_texts,
+        key=lambda x: transliterate(x.title, Scheme.HarvardKyoto, Scheme.Devanagari),
+    )
+    genre_map = {x.id: x for x in q.genres()}
+    author_map = {x.id: x for x in q.authors()}
+
+    text_entries = []
+    text_entry_map = {}
+    for text in sorted_mula_texts:
+        assert text.parent_id is None
+
+        genre = genre_map.get(text.genre_id)
+        author = author_map.get(text.author_id)
+        entry = TextEntry(
+            text=text,
+            children=[],
+            genre=genre,
+            author=author,
+        )
+        text_entries.append(entry)
+        text_entry_map[text.id] = entry
+
+    for text in sorted_child_texts:
+        assert text.parent_id is not None
+
+        entry = TextEntry(text=text, children=[], genre=None, author=None)
+        try:
+            parent = text_entry_map[text.parent_id]
+            parent.children.append(entry)
+        except KeyError:
+            pass
+
+    return text_entries
+
+
+def create_recent_text_entries() -> list[TextEntry]:
+    one_week_ago = datetime.utcnow() - timedelta(weeks=1)
+    all_entries = create_text_entries()
+    recent = [
+        e
+        for e in all_entries
+        if e.text.published_at is not None and e.text.published_at >= one_week_ago
+    ]
+    recent.sort(key=lambda e: e.text.published_at, reverse=True)
+    return recent[:10]
+
+
+def create_grouped_text_entries() -> dict[str, list[TextEntry]]:
+    _d = lambda x: transliterate(x, Scheme.HarvardKyoto, Scheme.Devanagari)
+
+    # Map genre name (Devanagari, as stored in DB) -> heading display value (HK)
+    genre_to_heading = {
+        _d("upaniSat"): "upaniSadaH",
+        _d("itihAsaH"): "itihAsau",
+        _d("kAvyam"): "kAvyAni",
+        _d("stotram"): "stotrANi",
+    }
+
+    fallback_heading = "anye granthAH"
+
+    grouped_entries = {}
+    for heading in genre_to_heading.values():
+        grouped_entries[heading] = []
+    grouped_entries[fallback_heading] = []
+
+    for entry in create_text_entries():
+        heading = None
+        if entry.genre:
+            heading = genre_to_heading.get(entry.genre.name)
+        if heading is None:
+            heading = fallback_heading
+        grouped_entries[heading].append(entry)
+    return grouped_entries

@@ -1,12 +1,6 @@
 import ambuda.utils.assets
 
 
-def test_get_image_filesystem_path(flask_app):
-    with flask_app.app_context():
-        path = ambuda.utils.assets.get_page_image_filepath("project", "1")
-    assert path.match("**/project/pages/1.jpg")
-
-
 def test_edit__unauth(client):
     r = client.get("/proofing/test-project/1/")
     assert "Since you are not logged in" in r.text
@@ -15,7 +9,7 @@ def test_edit__unauth(client):
 
 def test_edit__auth(rama_client):
     r = rama_client.get("/proofing/test-project/1/")
-    assert "Publish changes" in r.text
+    assert "Edit summary (optional)" in r.text
 
 
 def test_edit__bad_project(client):

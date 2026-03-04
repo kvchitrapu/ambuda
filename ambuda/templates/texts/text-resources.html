@@ -1,5 +1,5 @@
 {% extends 'base-text.html' %}
-{% import 'macros/library.html' as m %}
+{% import 'macros/texts.html' as m %}
 
 
 {% block title %}{{ text.title | devanagari }} {{ _('| Ambuda') }}{% endblock %}
@@ -14,6 +14,22 @@
 {% set smith = "https://bombay.indology.info/" %}
 
 <div class="prose">
+
+{% if exports %}
+<h2>{{ _('Downloads') }}</h2>
+<ul>
+  {% for export in exports %}
+  {% set label = export.export_config.label %}
+    {% if label %}
+    <li>
+      <a href="{{ url_for('texts.download_file', filename=export.slug) }}">{{ label }}</a>
+      {{ export.size|human_readable_bytes }}
+    </li>
+    {% endif %}
+  {% endfor %}
+</ul>
+{% endif %}
+
   <p>Most of our texts are sourced from a custom snapshot of GRETIL, which you
   can find <a href="{{ gretil }}">here</a>. Our {{ 'rAmAyaNam'|d }} and {{
   'mahAbhAratam'|d }} texts are sourced from <a href="{{ smith }}">John Smith's

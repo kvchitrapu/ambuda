@@ -7,6 +7,14 @@ are more locally scoped should be defined in the modules that use them.
 from dataclasses import dataclass
 
 
+#: A special slug for single-section texts.
+#:
+#: Some texts are small enough that they don't have any divisions (sargas,
+#: kandas). For simplicity, we represent such texts as having one section that
+#: we just call "all." All such texts are called *single-section texts.*
+SINGLE_SECTION_SLUG = "all"
+
+
 @dataclass
 class Locale:
     """Represents a locale option that we expose to users.
@@ -31,38 +39,6 @@ class Locale:
     text: str
 
 
-#: Defines a rough taxonomy of texts.
-#:
-#: This taxonomy is a temporary measure, and soon we will move this data into
-#: the database and avoid hard-coding a lists of texts.
-TEXT_CATEGORIES = {
-    "itihasa": [
-        "ramayanam",
-        "mahabharatam",
-    ],
-    "kavya": [
-        "amarushatakam",
-        "kiratarjuniyam",
-        "kumarasambhavam",
-        "kokilasandesha",
-        "caurapancashika",
-        "bhattikavyam",
-        "meghadutam-kale",
-        "mukundamala",
-        "raghuvamsham",
-        "shatakatrayam",
-        "shishupalavadham",
-        "saundaranandam",
-        "hamsadutam",
-    ],
-    "upanishat": ["shivopanishat"],
-    "anye": [
-        "bodhicaryavatara",
-        "catuhshloki",
-    ],
-}
-
-
 #: The username for our internal bot user.
 
 #: `ambuda-bot` performs background tasks like OCR. We assign these tasks to a
@@ -77,8 +53,9 @@ BOT_USERNAME = "ambuda-bot"
 #: list grows, we can consider more manageable ways to present this data to the
 #: user.
 LOCALES = [
-    Locale(code="sa", slug="sa", text="संस्कृतम्"),
+    # Put English first so Indian scripts are grouped.
     Locale(code="en", slug="en", text="English"),
+    Locale(code="sa", slug="sa", text="संस्कृतम्"),
     Locale(code="hi_IN", slug="hi", text="हिन्दी"),
     Locale(code="mr_IN", slug="mr", text="मराठी"),
     Locale(code="te_IN", slug="te", text="తెలుగు"),

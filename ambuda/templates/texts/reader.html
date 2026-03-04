@@ -1,0 +1,888 @@
+{# Reading environment for Sanskrit texts
+
+Each major component of the page is in its own macro. We split up the markup
+like this for readability.
+
+For the corresponding JavaScript bindings and logic, see `reader.js`.
+#}
+
+{% import "macros/icons.html" as i %}
+
+{% extends 'header-main-footer.html' %}
+{% import 'macros/dictionaries.html' as m_dict %}
+
+
+{# Section header and help dialog. #}
+{% macro header() %}
+{% set url = url_for('texts.text', slug=text.slug) %}
+<header class="my-8">
+  <div class="text-center pb-4 font-bold border-b">
+    {% if prev or next %}
+      <h1 class="text-2xl md:text-4xl"
+          x-text="data.section_title">
+        {{ section.title | hk_to_user_script }}
+      </h1>
+      <a class="block text-sm hover:text-green-600" href="{{ url }}"
+          x-text="data.text_title">
+        {{ text.title | hk_to_user_script }}
+      </a>
+    {% else %}
+      <h1 class="text-2xl md:text-4xl deva-serif">
+        {{ text.title | hk_to_user_script }}
+
+        {% if text.is_p0 %}
+        <a href="{{ url_for('about.unproofed_texts') }}">
+          {{ i.i_exclamation_circle() }}
+          {{ i.unproofed_text_icon() }}
+        </a>
+        {% endif %}
+      </h1>
+    {% endif %}
+  </div>
+
+</header>
+{% endmacro %}
+
+
+{# Prev/next navigation links in the page footer. #}
+{% macro _nav_link(text, section, display_text, direction) %}
+{% set base = "rounded text-2xl h-12 w-12 leading-[3rem] text-center" %}
+{% set data_url = "data.prev_url" if direction == "prev" else "data.next_url" %}
+{% set go_fn = "goToPrev" if direction == "prev" else "goToNext" %}
+{% if section %}
+  {% set url = url_for('texts.section', text_slug=text.slug, section_slug=section.slug) %}
+  <a class="{{ base }} hover:bg-slate-100"
+     href="{{ url }}"
+     :href="{{ data_url }}"
+     :class="{{ data_url }} ? 'hover:bg-slate-100' : 'text-slate-300 pointer-events-none'"
+     @click.prevent="{{ go_fn }}()">{{ display_text | safe }}</a>
+{% else %}
+  <a class="{{ base }} text-slate-300 pointer-events-none" href="#"
+     :href="{{ data_url }} || '#'"
+     :class="{{ data_url }} ? 'hover:bg-slate-100 !text-current !pointer-events-auto' : 'text-slate-300 pointer-events-none'"
+     @click.prevent="{{ go_fn }}()">{{ display_text | safe }}</a>
+{% endif %}
+{% endmacro %}
+
+
+{# Reader settings modal. #}
+{% macro settings_modal() %}
+<div x-show="showSettings" x-cloak
+     class="fixed inset-0 z-[60] flex items-center justify-center"
+     @keydown.escape.window="showSettings = false">
+  <div class="absolute inset-0 bg-black/40" @click="showSettings = false"></div>
+
+  <div class="relative bg-white rounded-lg shadow-xl w-80 p-6"
+       x-show="showSettings" x-transition>
+    <div class="flex items-center justify-between mb-6">
+      <h2 class="text-lg font-semibold">{{ _('Settings') }}</h2>
+      <button @click="showSettings = false" class="text-2xl leading-none text-slate-400 hover:text-slate-700">&times;</button>
+    </div>
+
+    <div class="space-y-5">
+      <div>
+        <label class="block text-sm font-medium text-slate-600 mb-1">{{ _('Text Width') }}</label>
+        <select class="f-select w-full" x-model="textWidth" @change="saveSettings">
+          <option value="md:max-w-xl">{{ _('Narrow') }}</option>
+          <option value="md:max-w-3xl">{{ _('Wide') }}</option>
+          <option value="max-w-none">{{ _('Full') }}</option>
+        </select>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-600 mb-1">{{ _('Font Size') }}</label>
+        <select class="f-select w-full" x-model="fontSize" @change="saveSettings">
+          <option value="md:text-base">{{ _('Tiny') }}</option>
+          <option value="md:text-lg">{{ _('Small') }}</option>
+          <option value="md:text-xl">{{ _('Medium') }}</option>
+          <option value="md:text-2xl">{{ _('Large') }}</option>
+          <option value="md:text-3xl">{{ _('X-Large') }}</option>
+        </select>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-slate-600 mb-1">{{ _('Script') }}</label>
+        <select id="switch-sa" class="f-select w-full"
+                @change="changeScript($event.target.value)">
+          {% include 'include/script-options-vidyut.html' %}
+        </select>
+      </div>
+
+    </div>
+  </div>
+</div>
+{% endmacro %}
+
+
+{% macro navbar() %}
+<nav class="flex items-center justify-between fixed bg-white left-0 right-0 top-0 h-12 border-b z-50">
+  <div class="flex items-center text-sm pl-4 min-w-0">
+    <a class="text-slate-400 hover:text-slate-700 shrink-0" href="{{ url_for('site.index') }}">Ambuda</a>
+    <span class="text-slate-300 mx-1.5 shrink-0">/</span>
+    <a class="text-slate-400 hover:text-slate-700 truncate" href="{{ url_for('texts.text', slug=text.slug) }}"
+        x-text="data.text_title">
+      {{ text.title | hk_to_user_script }}
+    </a>
+    {% if not is_single_section_text %}
+    <span class="text-slate-300 mx-1.5 shrink-0">/</span>
+    <span class="text-slate-500 truncate" x-text="data.section_title">
+      {{ section.title | hk_to_user_script }}
+    </span>
+    {% endif %}
+  </div>
+  <div class="flex items-center shrink-0">
+    <button @click="showSidebar = !showSidebar; saveSettings()"
+            class="flex items-center gap-1.5 text-slate-400 hover:text-slate-700 px-3 h-12 border-l"
+            title="{{ _('Information') }}">
+      <svg width="18" height="18"><use href="#info"></use></svg>
+      <span class="text-sm hidden sm:inline">{{ _('Information') }}</span>
+    </button>
+    <button @click="showSettings = true"
+            class="flex items-center gap-1.5 text-slate-400 hover:text-slate-700 px-3 h-12 border-l border-r"
+            title="{{ _('Settings') }}">
+      <svg width="18" height="18"><use href="#settings"></use></svg>
+      <span class="text-sm hidden sm:inline">{{ _('Settings') }}</span>
+    </button>
+    {{ _nav_link(text, prev, '&laquo;', 'prev') }}
+    {{ _nav_link(text, next, '&raquo;', 'next') }}
+  </div>
+</nav>
+{% endmacro %}
+
+
+{# Sidebar with dictionary information, etc.
+
+On small screens, the sidebar is fixed and covers the entire screen.
+On wide screens, the sidebar is on the right side of a split view.
+#}
+{% macro sidebar() %}
+<div id="sidebar" class="
+    overscroll-contain flex flex-col bg-slate-100 text-sm border-t
+    fixed top-1/2 bottom-0 left-0 right-0 flex-1
+    md:text-base
+    lg:relative lg:top-auto lg:flex-none
+    lg:border-t-0 lg:border-l lg:bg-slate-50"
+    :style="window.innerWidth >= 1024 && 'width:' + sidebarWidth + 'px'"
+    x-show="showSidebar" x-transition.opacity x-cloak>
+  <div class="hidden lg:block absolute left-0 top-0 bottom-0 w-2 z-10 cursor-col-resize
+              hover:bg-blue-300 active:bg-blue-400 transition-colors"
+       @mousedown.prevent="startResizeSidebar()"></div>
+
+  <div class="flex items-center shrink-0 border-b bg-white lg:bg-slate-50 px-3 h-10">
+    <div class="flex items-center gap-1 text-sm min-w-0">
+      <template x-if="sidebarTab === null">
+        <span class="text-slate-500 font-medium">{{ _('Information') }}</span>
+      </template>
+      <template x-if="sidebarTab !== null && sidebarTab !== 'word-detail'">
+        <div class="flex items-center gap-1 min-w-0">
+          <button class="text-slate-400 hover:text-slate-700 shrink-0" @click="sidebarTab = null">{{ _('Information') }}</button>
+          <span class="text-slate-300 shrink-0">&rsaquo;</span>
+          <span class="text-slate-500 truncate"
+                x-text="({
+                  about: '{{ _('About this text') }}',
+                  analyze: '{{ _('Analyze') }}',
+                  contents: '{{ _('Table of contents') }}',
+                  lookup: '{{ _('Dictionary lookup') }}',
+                  resources: '{{ _('Resources') }}',
+                })[sidebarTab]"></span>
+        </div>
+      </template>
+      <template x-if="sidebarTab === 'word-detail'">
+        <div class="flex items-center gap-1 min-w-0">
+          <button class="text-slate-400 hover:text-slate-700 shrink-0" @click="sidebarTab = null">{{ _('Information') }}</button>
+          <span class="text-slate-300 shrink-0">&rsaquo;</span>
+          <button class="text-slate-400 hover:text-slate-700 shrink-0" @click="sidebarTab = 'analyze'">{{ _('Analyze') }}</button>
+          <span class="text-slate-300 shrink-0">&rsaquo;</span>
+          <span class="text-slate-500 truncate" lang="sa" x-text="wordAnalysis.form"></span>
+        </div>
+      </template>
+    </div>
+    <button class="ml-auto text-xl leading-none text-slate-400 hover:text-slate-700 shrink-0"
+            @click="showSidebar = false; saveSettings()">&times;</button>
+  </div>
+
+  <div class="flex-1 overflow-y-auto">
+
+    <div x-show="sidebarTab === null" class="py-2">
+      <ul>
+        <li>
+          <button class="flex items-center gap-3 w-full px-4 py-2.5 text-left hover:bg-slate-200 transition-colors"
+                  @click="sidebarTab = 'about'">
+            <svg class="shrink-0 text-slate-400" width="18" height="18"><use href="#info"></use></svg>
+            <span>{{ _('About this text') }}</span>
+          </button>
+        </li>
+        {% if not is_single_section_text %}
+        <li>
+          <button class="flex items-center gap-3 w-full px-4 py-2.5 text-left hover:bg-slate-200 transition-colors"
+                  @click="sidebarTab = 'contents'">
+            <svg class="shrink-0 text-slate-400" width="18" height="18"><use href="#list"></use></svg>
+            <span>{{ _('Table of contents') }}</span>
+          </button>
+        </li>
+        {% endif %}
+        {% if not has_no_parse %}
+        <li>
+          <button class="flex items-center gap-3 w-full px-4 py-2.5 text-left hover:bg-slate-200 transition-colors"
+                  @click="sidebarTab = 'analyze'">
+            <svg class="shrink-0 text-slate-400" width="18" height="18"><use href="#analyze"></use></svg>
+            <span>{{ _('Analyze') }}</span>
+          </button>
+        </li>
+        {% endif %}
+        <li>
+          <button class="flex items-center gap-3 w-full px-4 py-2.5 text-left hover:bg-slate-200 transition-colors"
+                  @click="sidebarTab = 'lookup'">
+            <svg class="shrink-0 text-slate-400" width="18" height="18"><use href="#search"></use></svg>
+            <span>{{ _('Dictionary lookup') }}</span>
+          </button>
+        </li>
+        <li>
+          <button class="flex items-center gap-3 w-full px-4 py-2.5 text-left hover:bg-slate-200 transition-colors"
+                  @click="sidebarTab = 'resources'">
+            <svg class="shrink-0 text-slate-400" width="18" height="18"><use href="#file"></use></svg>
+            <span>{{ _('Resources') }}</span>
+          </button>
+        </li>
+      </ul>
+
+      {% if translations %}
+      <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 px-4 mt-4 mb-1">{{ _('Translations') }}</h3>
+      <hr class="mx-4 mb-1 border-slate-200">
+      <ul>
+        {% for t in translations %}
+        <li>
+          <label class="flex items-center gap-3 w-full px-4 py-2.5 hover:bg-slate-200 transition-colors cursor-pointer">
+            <input type="checkbox"
+                   @change="toggleTranslation('{{ t.slug }}')"
+                   :checked="enabledTranslations['{{ t.slug }}']"
+                   class="shrink-0">
+            <span>{{ t.title }}{% if t.language != 'sa' %} ({{ t.language }}){% endif %}</span>
+          </label>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      {% if commentaries %}
+      <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 px-4 mt-4 mb-1">{{ _('Commentaries') }}</h3>
+      <hr class="mx-4 mb-1 border-slate-200">
+      <ul>
+        {% for c in commentaries %}
+        <li>
+          <label class="flex items-center gap-3 w-full px-4 py-2.5 hover:bg-slate-200 transition-colors cursor-pointer">
+            <input type="checkbox"
+                   @change="toggleTranslation('{{ c.slug }}')"
+                   :checked="enabledTranslations['{{ c.slug }}']"
+                   class="shrink-0">
+            <span>{{ c.title }}</span>
+          </label>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </div>
+
+    <div x-show="sidebarTab === 'about'" x-cloak class="p-4">
+      <h2 class="text-lg font-semibold text-slate-700 mb-1">{{ _('About this text') }}</h2>
+      <hr class="mb-4 border-slate-200">
+      {% if text_about %}
+
+      {# --- Electronic text (publicationStmt / titleStmt) --- #}
+      <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">{{ _('Electronic Text') }}</h3>
+      <table class="text-sm w-full mb-4">
+        <tbody>
+          {% if text_about.tei_title %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Title') }}</td>
+            <td class="py-1.5">{{ text_about.tei_title }}</td>
+          </tr>
+          {% endif %}
+          {% if text_about.tei_author %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Author') }}</td>
+            <td class="py-1.5">{{ text_about.tei_author }}</td>
+          </tr>
+          {% endif %}
+          {% if text.project %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Project') }}</td>
+            <td class="py-1.5">
+              <a class="text-blue-500 hover:underline" href="{{ url_for('proofing.project.summary', slug=text.project.slug) }}">{{ text.project.display_title }}</a>
+            </td>
+          </tr>
+          {% endif %}
+          {% if text_about.tei_publisher %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Publisher') }}</td>
+            <td class="py-1.5">{{ text_about.tei_publisher }}</td>
+          </tr>
+          {% endif %}
+          {% if text_about.tei_publication_year %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Date') }}</td>
+            <td class="py-1.5">{{ text_about.tei_publication_year }}</td>
+          </tr>
+          {% endif %}
+          {% if text_about.tei_availability %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Availability') }}</td>
+            <td class="py-1.5">{{ text_about.tei_availability | safe }}</td>
+          </tr>
+          {% endif %}
+        </tbody>
+      </table>
+
+      {% if text.tags %}
+      <div class="mb-4">
+        <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">{{ _('Tags') }}</h3>
+        <div class="flex flex-wrap gap-1.5">
+          {% for tag in text.tags %}
+          <span class="inline-block px-2 py-0.5 text-xs rounded-full bg-slate-100 text-slate-600">{{ tag.name }}</span>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
+      {# --- Source edition (sourceDesc) --- #}
+      <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">{{ _('Source Edition') }}</h3>
+      {% if text_about.has_source_info %}
+      <table class="text-sm w-full mb-4">
+        <tbody>
+          {% if text_about.source_author %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Author') }}</td>
+            <td class="py-1.5">{{ text_about.source_author }}</td>
+          </tr>
+          {% endif %}
+          {% if text_about.source_editor %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Editor') }}</td>
+            <td class="py-1.5">{{ text_about.source_editor }}</td>
+          </tr>
+          {% endif %}
+          {% if text_about.source_publisher %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Publisher') }}</td>
+            <td class="py-1.5">{{ text_about.source_publisher }}</td>
+          </tr>
+          {% endif %}
+          {% if text_about.source_publisher_place %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Location') }}</td>
+            <td class="py-1.5">{{ text_about.source_publisher_place }}</td>
+          </tr>
+          {% endif %}
+          {% if text_about.source_publication_year %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Year') }}</td>
+            <td class="py-1.5">{{ text_about.source_publication_year }}</td>
+          </tr>
+          {% endif %}
+          {% if text_about.source_citation %}
+          <tr>
+            <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Source') }}</td>
+            <td class="py-1.5">{{ text_about.source_citation }}</td>
+          </tr>
+          {% endif %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="text-sm text-slate-400 mb-4">{{ _('Unknown') }}</p>
+      {% endif %}
+      {% if text.project and text.project.sources %}
+      <div class="mt-4">
+        <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">{{ _('Project Details') }}</h3>
+        <table class="text-sm w-full">
+          <tbody>
+            <tr>
+              <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Project') }}</td>
+              <td class="py-1.5">
+                <a class="text-blue-500 hover:underline" href="{{ url_for('proofing.project.summary', slug=text.project.slug) }}">{{ text.project.display_title }}</a>
+              </td>
+            </tr>
+            <tr>
+              <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Created') }}</td>
+              <td class="py-1.5">{{ text.project.created_at.strftime('%Y-%m-%d') }}</td>
+            </tr>
+            <tr>
+              <td class="pr-4 py-1.5 text-slate-500 align-top whitespace-nowrap">{{ _('Sources') }}</td>
+              <td class="py-1.5">
+                <ul class="space-y-1">
+                  {% for source in text.project.sources %}
+                  <li>
+                    {% if source.url %}
+                    <a class="text-blue-500 hover:underline" href="{{ source.url }}">{{ source.description }}</a>
+                    {% else %}
+                    {{ source.description }}
+                    {% endif %}
+                  </li>
+                  {% endfor %}
+                </ul>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+      {% if text_about.credits %}
+      <div class="mt-4">
+        <h3 class="text-sm font-medium text-slate-600 mb-1">{{ _('Credits') }}</h3>
+        <dl class="text-sm">
+          {% for role, names in text_about.credits %}
+          <div class="flex justify-between gap-4 py-1 border-b border-slate-100">
+            <dt>{{ names | join(', ') }}</dt>
+            <dd class="text-slate-500 text-right shrink-0">{{ role }}</dd>
+          </div>
+          {% endfor %}
+        </dl>
+      </div>
+      {% endif %}
+      {% if text_about.notes %}
+      <div class="mt-4">
+        <h3 class="text-sm font-medium text-slate-600 mb-1">{{ _('Notes') }}</h3>
+        <div class="text-sm text-slate-600">{{ text_about.notes | safe }}</div>
+      </div>
+      {% endif %}
+      {% if text_about.revision_desc %}
+      <div class="mt-4">
+        <h3 class="text-sm font-medium text-slate-600 mb-1">{{ _('Revision History') }}</h3>
+        <ul class="text-sm space-y-2">
+          {% for entry in text_about.revision_desc %}
+          <li class="border-b border-slate-100 pb-2">
+            <div class="text-slate-600">{{ entry.description }}</div>
+            {% if entry.date or entry.who %}
+            <div class="text-xs text-slate-400 mt-0.5">
+              {%- if entry.date %}{{ entry.date }}{% endif -%}
+              {%- if entry.date and entry.who %} &middot; {% endif -%}
+              {%- if entry.who %}{{ entry.who }}{% endif -%}
+            </div>
+            {% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endif %}
+      {% endif %}
+      {% if report_summary and report_summary.num_total > 0 %}
+        {% if report_summary.num_passed == report_summary.num_total %}
+          {% set bg = 'bg-green-100 text-green-800' %}
+        {% elif report_summary.num_passed == 0 %}
+          {% set bg = 'bg-red-100 text-red-800' %}
+        {% else %}
+          {% set bg = 'bg-yellow-100 text-yellow-800' %}
+        {% endif %}
+      <div class="mt-6">
+        <h3 class="text-xs font-semibold uppercase tracking-wide text-slate-400 mb-2">{{ _('Quality Report') }}</h3>
+        <a href="{{ url_for('proofing.text_report', slug=text.slug) }}"
+           class="inline-block text-sm font-medium px-2.5 py-1 rounded {{ bg }} hover:underline">{{ report_summary.num_passed }}/{{ report_summary.num_total }} {{ _('checks passed') }}</a>
+      </div>
+      {% endif %}
+
+      {% if raw_header %}
+      <details class="mt-6">
+        <summary class="text-sm text-slate-400 cursor-pointer select-none hover:text-slate-600">{{ _('Raw TEI header') }}</summary>
+        <pre class="mt-2 text-xs rounded bg-slate-800 text-white p-4 overflow-x-auto">{{ raw_header }}</pre>
+      </details>
+      {% endif %}
+      {% if not text_about and not raw_header %}
+      <p class="text-slate-400 text-sm">{{ _('No metadata available for this text.') }}</p>
+      {% endif %}
+    </div>
+
+    <div x-show="sidebarTab === 'contents'" x-cloak class="p-4">
+      <h2 class="text-lg font-semibold text-slate-700 mb-1">{{ _('Table of contents') }}</h2>
+      <hr class="mb-4 border-slate-200">
+      {% for prefix, sections in section_groups.items() %}
+        {%- set title = prefix_titles.get(prefix) if prefix_titles else None -%}
+        {%- set is_current_group = prefix == section.slug.rpartition('.')[0] -%}
+        {% if prefix %}
+        <details class="mb-1" {% if is_current_group %}open{% endif %}>
+          <summary class="font-bold text-sm cursor-pointer select-none py-1.5 px-2 rounded hover:bg-slate-200">
+            {% if title %}{{ title | hk_slug_to_user_script }}{% else %}{{ prefix }}{% endif %}
+          </summary>
+          <ul class="space-y-0.5 mb-2">
+          {% for (slug, name) in sections %}
+            {% set url = url_for('texts.section', text_slug=text.slug, section_slug=slug) %}
+            {% set is_current = (slug == section.slug) %}
+            <li>
+              <a class="block px-2 py-1 rounded text-sm {{ 'bg-blue-50 text-blue-700 font-medium' if is_current else 'hover:bg-slate-200' }}"
+                 :class="sectionSlug === '{{ slug }}' ? 'bg-blue-50 text-blue-700 font-medium' : 'hover:bg-slate-200'"
+                 href="{{ url }}"
+                 @click.prevent="navigateToTocEntry('{{ url }}')">
+                {{ name | hk_slug_to_user_script }}
+              </a>
+            </li>
+          {% endfor %}
+          </ul>
+        </details>
+        {% else %}
+        <ul class="space-y-0.5 mb-4">
+        {% for (slug, name) in sections %}
+          {% set url = url_for('texts.section', text_slug=text.slug, section_slug=slug) %}
+          {% set is_current = (slug == section.slug) %}
+          <li>
+            <a class="block px-2 py-1 rounded text-sm {{ 'bg-blue-50 text-blue-700 font-medium' if is_current else 'hover:bg-slate-200' }}"
+               :class="sectionSlug === '{{ slug }}' ? 'bg-blue-50 text-blue-700 font-medium' : 'hover:bg-slate-200'"
+               href="{{ url }}"
+               @click.prevent="navigateToTocEntry('{{ url }}')">
+              {{ name | hk_slug_to_user_script }}
+            </a>
+          </li>
+        {% endfor %}
+        </ul>
+        {% endif %}
+      {% endfor %}
+    </div>
+
+    <div x-show="sidebarTab === 'analyze'" x-cloak class="p-4">
+      <h2 class="text-lg font-semibold text-slate-700 mb-1">{{ _('Analyze') }}</h2>
+      <hr class="mb-4 border-slate-200">
+
+      <template x-if="analyzeData.error">
+        <div class="text-sm text-red-600" x-html="analyzeData.error"></div>
+      </template>
+
+      <template x-if="analyzeData.words.length > 0">
+        <table class="w-full">
+          <thead>
+            <tr class="border-b text-left text-slate-500 text-sm">
+              <th class="py-1.5 pr-3 font-medium">{{ _('Word') }}</th>
+              <th class="py-1.5 pr-3 font-medium">{{ _('Base') }}</th>
+              <th class="py-1.5 font-medium">{{ _('Parse') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="word in analyzeData.words">
+              <tr class="border-b border-slate-100 cursor-pointer hover:bg-slate-100 transition-colors"
+                  @click="lookupAnalyzeWord(word)">
+                <td class="py-1.5 pr-3" lang="sa" x-text="word.form"></td>
+                <td class="py-1.5 pr-3" lang="sa" x-text="word.lemma"></td>
+                <td class="py-1.5 text-slate-500 text-sm" lang="en" x-text="word.parse"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </template>
+
+      <template x-if="analyzeData.loading">
+        <p class="text-slate-400 text-sm">{{ _('Loading...') }}</p>
+      </template>
+
+      <template x-if="!analyzeData.error && !analyzeData.loading && analyzeData.words.length === 0">
+        <p class="text-slate-400 text-sm">{{ _('Click a verse to see its word-by-word analysis.') }}</p>
+      </template>
+    </div>
+
+    <div x-show="sidebarTab === 'word-detail'" x-cloak class="p-4">
+      <div class="text-sm" x-show="wordAnalysis.form">
+        <header>
+          <h1 class="text-xl" lang="sa" x-text="wordAnalysis.form"></h1>
+          <p class="mb-4">
+            <span lang="sa" x-text="wordAnalysis.lemma"></span>
+            <span x-text="wordAnalysis.parse"></span>
+          </p>
+        </header>
+      </div>
+
+      <div class="flex gap-2 mb-4 border-b border-slate-200">
+        <button class="px-3 py-1.5 text-sm font-medium -mb-px border-b-2 transition-colors"
+                :class="wordDetailTab === 'meaning' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'"
+                @click="wordDetailTab = 'meaning'">{{ _('Meaning') }}</button>
+        <button class="px-3 py-1.5 text-sm font-medium -mb-px border-b-2 transition-colors"
+                :class="wordDetailTab === 'grammar' ? 'border-blue-500 text-blue-600' : 'border-transparent text-slate-500 hover:text-slate-700'"
+                @click="wordDetailTab = 'grammar'">{{ _('Grammar') }}</button>
+      </div>
+
+      <div x-show="wordDetailTab === 'meaning'">
+        <form class="mb-4" @submit.prevent="searchDictionary">
+          <div class="mb-2 hidden lg:flex">
+            <input name="q" type="text" placeholder="राम, ರಾಮ, ma, rAma, ..."
+                class="p-2 flex-1 bg-slate-100 rounded-tl rounded-bl"
+                x-model="dictQuery">
+            <input type="submit" value="{{ _('Search') }}"
+                class="cursor-pointer btn-submit p-2 rounded-tr rounded-br">
+          </div>
+
+          <div x-cloak @click.outside="onClickOutsideOfSourceSelector"
+              class="relative text-sm select-none inline-block">
+            <div class="f-select bg-white lg:bg-slate-100 px-2 cursor-pointer inline-block"
+                 @click.prevent="toggleSourceSelector">
+                {{ _('(choose dictionary)') }} <span class="text-xs">&#x25BC;</span>
+            </div>
+            <div x-show="showDictSourceSelector" class="dropdown-pane p-2 w-64 !static lg:!absolute">
+              {{ m_dict.source_multiselect(x_model='dictSources') }}
+            </div>
+          </div>
+        </form>
+        <div x-html="dictionaryResponse"></div>
+      </div>
+
+      <div x-show="wordDetailTab === 'grammar'">
+        <div x-show="grammarDetailResponse">
+          <button class="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700 mb-3"
+                  @click="grammarDetailResponse = null">
+            <span>&lsaquo;</span> {{ _('Back') }}
+          </button>
+          <div x-html="grammarDetailResponse"></div>
+        </div>
+        <div x-show="!grammarDetailResponse" @click="onClickGrammar($event)">
+          <div x-html="grammarResponse"></div>
+        </div>
+      </div>
+    </div>
+
+    <div x-show="sidebarTab === 'lookup'" x-cloak class="p-4">
+      <div id="parse--response" class="text-sm"></div>
+
+      <div class="text-sm" x-show="wordAnalysis.form">
+        <header>
+          <h1 class="text-xl" lang="sa" x-text="wordAnalysis.form"></h1>
+          <p class="mb-8">
+            <span lang="sa" x-text="wordAnalysis.lemma"></span>
+            <span x-text="wordAnalysis.parse"></span>
+          </p>
+        </header>
+      </div>
+
+      <form id="dict--form" class="mb-4" @submit.prevent="searchDictionary">
+        <div class="mb-2 hidden lg:flex">
+          <input name="q" type="text" placeholder="राम, ರಾಮ, ma, rAma, ..."
+              class="p-2 flex-1 bg-slate-100 rounded-tl rounded-bl"
+              x-model="dictQuery"
+              ></input>
+          <input type="submit" value="{{ _('Search') }}"
+          class="cursor-pointer btn-submit p-2 rounded-tr rounded-br"></input>
+        </div>
+
+        <div x-cloak @click.outside="onClickOutsideOfSourceSelector"
+            class="relative text-sm select-none inline-block">
+          <div class="f-select bg-white lg:bg-slate-100 px-2 cursor-pointer inline-block"
+               @click.prevent="toggleSourceSelector">
+              {{ _('(choose dictionary)') }} <span class="text-xs">&#x25BC;</span>
+          </div>
+          <div x-show="showDictSourceSelector" class="dropdown-pane p-2 w-64 !static lg:!absolute">
+            {{ m_dict.source_multiselect(x_model='dictSources') }}
+          </div>
+        </div>
+      </form>
+      <div x-html="dictionaryResponse"></div>
+    </div>
+
+    <div x-show="sidebarTab === 'resources'" x-cloak class="p-4">
+      <h2 class="text-lg font-semibold text-slate-700 mb-1">{{ _('Resources') }}</h2>
+      <hr class="mb-4 border-slate-200">
+
+      {% if exports %}
+      <h3 class="font-medium text-sm text-slate-600 mb-2">{{ _('Downloads') }}</h3>
+      <ul class="space-y-1 mb-6">
+        {% for export in exports %}
+        {% set label = export.export_config.label if export.export_config else None %}
+        {% if label %}
+        <li>
+          <a class="flex items-center justify-between text-sm text-blue-500 hover:underline"
+             href="{{ url_for('texts.download_file', filename=export.slug) }}">
+            <span>{{ label }}</span>
+            <span class="text-slate-400 text-xs">{{ export.size|human_readable_bytes }}</span>
+          </a>
+        </li>
+        {% endif %}
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      {% set gretil = "https://github.com/ambuda-org/gretil" %}
+      {% set dcs = "https://github.com/ambuda-org/dcs" %}
+      {% set smith = "https://bombay.indology.info/" %}
+      <div class="text-sm text-slate-600 space-y-2">
+        <p>{{ _('Most of our texts are sourced from a custom snapshot of GRETIL, which you can find') }}
+          <a class="text-blue-500 hover:underline" href="{{ gretil }}">{{ _('here') }}</a>.
+          {{ _('Our') }} {{ 'rAmAyaNam'|d }} {{ _('and') }} {{ 'mahAbhAratam'|d }}
+          {{ _('texts are sourced from') }}
+          <a class="text-blue-500 hover:underline" href="{{ smith }}">{{ _("John Smith's website") }}</a>.</p>
+        <p>{{ _('Parse data comes from a custom snapshot of the Digital Corpus of Sanskrit, which you can find') }}
+          <a class="text-blue-500 hover:underline" href="{{ dcs }}">{{ _('here') }}</a>.</p>
+      </div>
+    </div>
+
+  </div>
+</div>
+{% endmacro %}
+
+
+{# Title and section. For single-section texts, show just the title. #}
+{% if prev or next %}
+{% set page_title = text.title|hk_to_user_script + " " + section.title|hk_to_user_script %}
+{% else %}
+{% set page_title = text.title|hk_to_user_script %}
+{% endif %}
+{% block title %}{{ page_title }} | Ambuda{% endblock %}
+
+
+{% block main %}
+{# Serialize the data above so we can use it without a second network call. #}
+<script id="payload" type="application/json">{{ json_payload|safe }}</script>
+
+<article lang="sa" class="flex h-[calc(100vh-3rem)] mt-12" x-cloak x-data="reader" @click="onClick" data-script="{{ session.get('script', 'Devanagari') }}">
+  <div class="flex-1 min-h-0 overflow-y-auto">
+  <div class="mx-auto px-4 pb-40 w-full"
+      :class="textWidth">
+  <div :class="fontSize">
+
+  {{ header() }}
+  {{ i.i_edit() }}
+  {{ i.i_bookmark() }}
+  {{ i.i_link() }}
+  {{ i.i_settings() }}
+  {{ i.i_info() }}
+  {{ i.i_list() }}
+  {{ i.i_analyze() }}
+  {{ i.i_search() }}
+  {{ i.i_file() }}
+
+  {# Server-side logic. This will be hidden once the application loads. #}
+  <div x-show="!data.blocks.length">
+  {% for block_ in html_blocks %}
+    {% set is_child_block = block_.parent_blocks %}
+
+    {% if is_child_block %}
+      {% for parent_block in block_.parent_blocks %}
+      <s-block data-slug="{{ parent_block.slug }}" class="parent-block">
+        <div class="flex items-start gap-2 mb-4 pb-4">
+          <div class="mula flex-1">{{ parent_block.mula|safe }}</div>
+          {% if parent_block.page_url %}
+          <a href="{{ parent_block.page_url }}"
+             class="text-slate-400 hover:text-slate-600 flex-shrink-0 mt-1"
+             title="{{ _('Edit in proofing interface') }}">
+            <svg width="16" height="16"><use href="#edit"></use></svg>
+          </a>
+          {% endif %}
+        </div>
+      </s-block>
+      {% endfor %}
+    {% endif %}
+
+    <s-block id="{{ block_.slug }}" data-slug="{{ block_.slug }}">
+      <div class="flex items-start gap-2">
+        <div class="mula flex-1">{{ block_.mula|safe }}</div>
+        <div class="relative flex-shrink-0 mt-1 group" x-data="{ open: false }">
+          <button @click="open = !open"
+                  class="text-slate-400 hover:text-slate-600 opacity-0 group-hover:opacity-100 transition-opacity"
+                  title="{{ _('Block actions') }}">
+            <span class="text-xs">&#x25BC;</span>
+          </button>
+          <div x-show="open"
+               @click.outside="open = false"
+               class="absolute right-0 mt-1 w-32 bg-white border rounded shadow-lg z-10"
+               x-cloak>
+            {% if block_.page_url %}
+            <a href="{{ block_.page_url }}"
+               class="block px-3 py-2 text-sm hover:bg-slate-100 flex items-center gap-2"
+               title="{{ _('Edit in proofing interface') }}">
+              <svg width="16" height="16"><use href="#edit"></use></svg>
+              <span>{{ _('Edit') }}</span>
+            </a>
+            {% endif %}
+            <a href="#{{ block_.slug }}"
+               class="block px-3 py-2 text-sm hover:bg-slate-100 flex items-center gap-2"
+               title="{{ _('Link to this block') }}">
+              <svg width="16" height="16"><use href="#link"></use></svg>
+              <span>{{ _('Permalink') }}</span>
+            </a>
+            <a href="#"
+               onclick="alert('Please enable JavaScript to bookmark verses'); return false;"
+               class="block px-3 py-2 text-sm hover:bg-slate-100 flex items-center gap-2"
+               title="{{ _('Bookmark this block') }}">
+              <svg width="16" height="16"><use href="#bookmark"></use></svg>
+              <span>{{ _('Bookmark') }}</span>
+            </a>
+          </div>
+        </div>
+      </div>
+    </s-block>
+
+  {% endfor %}
+  </div>
+
+  {# Client-side logic. This is what most readers will see and use. #}
+  <template x-for="b in data.blocks">
+    <div class="deva-serif">
+
+      {# Parent blocks #}
+      <template x-if="b.parent_blocks && b.parent_blocks.length > 0">
+        <template x-for="parent_block in b.parent_blocks">
+          <s-block :data-slug="parent_block.slug" class="parent-block">
+            <div class="flex items-start gap-2 mb-4 pb-4">
+              <div class="flex-1">
+                <div class="mula" x-html="parent_block.mula"></div>
+              </div>
+              <a x-show="parent_block.page_url"
+                 :href="parent_block.page_url"
+                 class="text-slate-400 hover:text-slate-600 flex-shrink-0 mt-1"
+                 title="{{ _('Edit in proofing interface') }}">
+                <svg width="16" height="16"><use href="#edit"></use></svg>
+              </a>
+            </div>
+          </s-block>
+        </template>
+      </template>
+
+      {# Child blocks #}
+      <s-block :data-slug="b.slug" :id="b.slug" class="group">
+        <div class="flex items-start gap-2">
+          <div class="flex-1 cursor-pointer">
+            <div x-html="b.mula"></div>
+          </div>
+          <div class="relative flex-shrink-0 mt-1 opacity-0 group-hover:opacity-100 transition-opacity" x-data="{ open: false }">
+            <button @click="open = !open"
+                    class="text-slate-400 hover:text-slate-600"
+                    title="{{ _('Block actions') }}">
+              <span class="text-xs">&#x25BC;</span>
+            </button>
+            <div x-show="open"
+                 @click.outside="open = false"
+                 class="absolute right-0 mt-1 w-32 bg-white border rounded shadow-lg z-10"
+                 x-cloak>
+              <a x-show="b.page_url"
+                 :href="b.page_url"
+                 class="block px-3 py-2 text-sm hover:bg-slate-100 flex items-center gap-2"
+                 title="{{ _('Edit in proofing interface') }}">
+                <svg width="16" height="16"><use href="#edit"></use></svg>
+                <span>{{ _('Edit') }}</span>
+              </a>
+              <a :href="'#' + b.slug"
+                 class="block px-3 py-2 text-sm hover:bg-slate-100 flex items-center gap-2"
+                 title="{{ _('Link to this block') }}">
+                <svg width="16" height="16"><use href="#link"></use></svg>
+                <span>{{ _('Permalink') }}</span>
+              </a>
+              <a href="#"
+                 @click="toggleBookmark(b.slug, $event)"
+                 class="block px-3 py-2 text-sm hover:bg-slate-100 flex items-center gap-2"
+                 title="{{ _('Bookmark this block') }}">
+                <svg width="16" height="16"><use href="#bookmark"></use></svg>
+                <span>{{ _('Bookmark') }}</span>
+              </a>
+            </div>
+          </div>
+        </div>
+      </s-block>
+
+      <template x-for="tr in translationsFor(b.slug)" :key="tr.slug">
+        <div class="translation-block pl-4 border-l-2 border-slate-200 mt-2 text text-slate-600"
+             x-html="tr.html"></div>
+      </template>
+    </div>
+  </template>
+
+  </div></div></div>
+
+  {{ navbar() }}
+  {{ sidebar() }}
+  {{ settings_modal() }}
+</article>
+{% endblock %}
+
+{% block header %}{% endblock %}
+{# Hide footer because we have a position:fixed nav "footer" already. #}
+{% block footer %}{% endblock %}

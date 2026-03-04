@@ -1,10 +1,15 @@
+import os
+
+import boto3
+import moto
 import pytest
 from flask_login import FlaskLoginClient
+from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
 import ambuda.database as db
 from ambuda import create_app
-from ambuda.consts import BOT_USERNAME, TEXT_CATEGORIES
+from ambuda.consts import BOT_USERNAME
 from ambuda.queries import get_engine, get_session
 from ambuda.seed.lookup import page_status as page_status_seeding
 from ambuda.seed.lookup import role as role_seeding
@@ -40,13 +45,6 @@ def initialize_test_db():
     text = db.Text(slug="pariksha", title="parIkSA")
     session.add(text)
     session.flush()
-
-    # Create stubs for all texts so that texts.index doesn't break
-    for _category, slugs in TEXT_CATEGORIES.items():
-        for slug in slugs:
-            t = db.Text(slug=slug, title=slug)
-            session.add(t)
-            session.flush()
 
     section = db.TextSection(text_id=text.id, slug="1", title="adhyAyaH 1")
     session.add(section)
@@ -91,6 +89,12 @@ def initialize_test_db():
     session.add(admin)
     session.flush()
 
+    # Non-P1 user (no proofing roles)
+    u_nop1 = db.User(username="u-no-p1", email="u_no_p1@ambuda.org")
+    u_nop1.set_password("pass_no_p1")
+    session.add(u_nop1)
+    session.flush()
+
     # Deleted and Banned
     deleted_admin = db.User(username="u-deleted", email="u_deleted@ambuda.org")
     deleted_admin.set_password("pass_deleted")
@@ -105,10 +109,14 @@ def initialize_test_db():
     session.flush()
 
     # Roles
-    p1_role = session.query(db.Role).filter_by(name="p1").one()
-    p2_role = session.query(db.Role).filter_by(name="p2").one()
-    moderator_role = session.query(db.Role).filter_by(name="moderator").one()
-    admin_role = session.query(db.Role).filter_by(name="admin").one()
+    stmt = select(db.Role).filter_by(name="p1")
+    p1_role = session.scalars(stmt).one()
+    stmt = select(db.Role).filter_by(name="p2")
+    p2_role = session.scalars(stmt).one()
+    stmt = select(db.Role).filter_by(name="moderator")
+    moderator_role = session.scalars(stmt).one()
+    stmt = select(db.Role).filter_by(name="admin")
+    admin_role = session.scalars(stmt).one()
 
     session.add(p1_role)
     session.add(p2_role)
@@ -138,6 +146,13 @@ def initialize_test_db():
     session.add(post)
     session.commit()
 
+    # Genres
+    # using harvard-kyoto because devanagari breaks my editor :(
+    genre_1 = db.Genre(name="kAvyam")
+    genre_2 = db.Genre(name="zAstram")
+    session.add_all([genre_1, genre_2])
+    session.flush()
+
     # Proofing
     board = db.Board(title="board")
     session.add(board)
@@ -150,12 +165,17 @@ def initialize_test_db():
     board.threads = [thread]
 
     project = db.Project(
-        slug="test-project", display_title="Test Project", board_id=board.id
+        slug="test-project",
+        display_title="Test Project",
+        board_id=board.id,
+        creator_id=admin.id,
+        genre_id=genre_1.id,
     )
     session.add(project)
     session.flush()
 
-    reviewed_0 = session.query(db.PageStatus).filter_by(name="reviewed-0").one()
+    stmt = select(db.PageStatus).filter_by(name="reviewed-0")
+    reviewed_0 = session.scalars(stmt).one()
 
     page = db.Page(project_id=project.id, slug="1", order=1, status_id=reviewed_0.id)
     session.add(page)
@@ -173,11 +193,29 @@ def initialize_test_db():
     session.commit()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def s3_mocks():
+    """autouse so that every test automatically uses mocks."""
+    os.environ["AWS_ACCESS_KEY_ID"] = "testing"
+    os.environ["AWS_SECRET_ACCESS_KEY"] = "testing"
+
+    with moto.mock_aws():
+        conn = boto3.resource("s3")
+        conn.create_bucket(Bucket="test-ambuda")
+        yield
+
+
 @pytest.fixture(scope="session")
 def flask_app():
     app = create_app("testing")
     app.config.update({"TESTING": True})
     app.test_client_class = FlaskLoginClient
+
+    # Prevent tasks from being sent to a real Redis broker during tests.
+    # task_eager_propagates ensures exceptions in tasks surface as test failures.
+    from ambuda.tasks import app as celery_app
+
+    celery_app.conf.update(task_always_eager=True, task_eager_propagates=True)
 
     with app.app_context():
         initialize_test_db()
@@ -199,33 +237,46 @@ def client(flask_app):
 @pytest.fixture()
 def rama_client(flask_app):
     session = get_session()
-    user = session.query(db.User).filter_by(username="u-basic").first()
+    stmt = select(db.User).filter_by(username="u-basic")
+    user = session.scalars(stmt).first()
     return flask_app.test_client(user=user)
 
 
 @pytest.fixture()
 def moderator_client(flask_app):
     session = get_session()
-    moderator = session.query(db.User).filter_by(username="u-moderator").first()
+    stmt = select(db.User).filter_by(username="u-moderator")
+    moderator = session.scalars(stmt).first()
     return flask_app.test_client(user=moderator)
 
 
 @pytest.fixture()
 def admin_client(flask_app):
     session = get_session()
-    user = session.query(db.User).filter_by(username="u-admin").first()
+    stmt = select(db.User).filter_by(username="u-admin")
+    user = session.scalars(stmt).first()
     return flask_app.test_client(user=user)
 
 
 @pytest.fixture()
 def deleted_client(flask_app):
     session = get_session()
-    user = session.query(db.User).filter_by(username="u-deleted").first()
+    stmt = select(db.User).filter_by(username="u-deleted")
+    user = session.scalars(stmt).first()
     return flask_app.test_client(user=user)
 
 
 @pytest.fixture()
 def banned_client(flask_app):
     session = get_session()
-    user = session.query(db.User).filter_by(username="u-banned").first()
+    stmt = select(db.User).filter_by(username="u-banned")
+    user = session.scalars(stmt).first()
+    return flask_app.test_client(user=user)
+
+
+@pytest.fixture()
+def no_p1_client(flask_app):
+    session = get_session()
+    stmt = select(db.User).filter_by(username="u-no-p1")
+    user = session.scalars(stmt).first()
     return flask_app.test_client(user=user)

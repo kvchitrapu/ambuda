@@ -17,6 +17,7 @@ env/
 node_modules/
 
 # Development database
+.s3_local/
 *.db
 
 # i18n files:
@@ -29,6 +30,7 @@ node_modules/
 
 # Production config
 .env
+.env.docker.local
 production/
 
 # IDE config

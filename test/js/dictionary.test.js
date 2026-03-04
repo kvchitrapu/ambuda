@@ -11,20 +11,25 @@ const sampleHTML = `
 
 window.Sanscript = {
   t: jest.fn((s, from, to) => `${s}:${to}`),
-}
+  schemes: { devanagari: {}, hk: {}, iast: {}, kannada: {} },
+};
 
 window.fetch = jest.fn(async (url) => {
   // Special URL so we can test server errors.
-  if (url === '/api/dictionaries/mw/error') {
+  if (url.startsWith('/api/dictionaries/mw/error')) {
     return { ok: false }
-  } else {
-    const segments = url.split('/');
+  } else if (url.startsWith('/api/dictionaries/')) {
+    const base = url.split('?')[0];
+    const segments = base.split('/');
     const respText = segments.pop();
     const dict = segments.pop();
     return {
       ok: true,
       text: async () => `<div>fetched ${dict}:${respText}</div>`,
     }
+  } else {
+    // /script/<slug> calls
+    return { ok: true };
   }
 });
 
@@ -35,21 +40,19 @@ beforeEach(() => {
 
 test('Dictionary can be created', () => {
   const d = Dictionary()
+  d.$root = { dataset: { script: 'Devanagari' } };
   d.init();
 });
 
 test('saveSettings and loadSettings work as expected', () => {
   const d1 = Dictionary();
-  d1.script = "test script";
   d1.sources = ["test source"];
   d1.saveSettings();
 
   const d2 = Dictionary()
-  expect(d2.script).toBe("devanagari");
   expect(d2.sources).toEqual(["mw"]);
 
   d2.loadSettings();
-  expect(d2.script).toBe("test script");
   expect(d2.sources).toEqual(["test source"]);
 });
 
@@ -57,7 +60,6 @@ test('loadSettings works if localStorage data is empty', () => {
   localStorage.setItem('dictionary', "{}");
   const d = Dictionary();
   d.loadSettings();
-  expect(d.script).toBe('devanagari');
   expect(d.sources).toEqual(['mw']);
 });
 
@@ -65,12 +67,12 @@ test('loadSettings works if localStorage data is corrupt', () => {
   localStorage.setItem('dictionary', "invalid JSON");
   const d = Dictionary();
   d.loadSettings();
-  expect(d.script).toBe('devanagari');
   expect(d.sources).toEqual(['mw']);
 });
 
 test('updateSource updates config then fetches', async () => {
   const d = Dictionary();
+  d.$root = { dataset: { script: 'Devanagari' } };
   d.init();
   d.query = 'foo';
   expect(d.sources).toEqual(['mw']);
@@ -81,18 +83,16 @@ test('updateSource updates config then fetches', async () => {
   expect($('#dict--response').innerHTML).toBe('<div>fetched apte:foo</div>');
 });
 
-test('updateScript transliterates and updates settings', () => {
+test('changeScript updates session and re-fetches', async () => {
   const d = Dictionary();
+  d.$root = { dataset: { script: 'Devanagari' } };
   d.init();
+  d.query = 'foo';
+  d.sources = ['mw'];
 
-  d.uiScript = 'kannada';
-  d.updateScript();
-  expect(d.script).toBe('kannada');
-  expect($('#dict--response').textContent.trim()).toBe('padam:kannada');
-
-  const d2 = Dictionary()
-  d2.init();
-  expect(d2.script).toBe('kannada');
+  await d.changeScript('Kannada');
+  expect(d.userScript).toBe('Kannada');
+  expect($('#dict--response').innerHTML).toBe('<div>fetched mw:foo</div>');
 });
 
 test('searchDictionary fetches a response', async () => {

@@ -1,0 +1,44 @@
+{% extends "admin/base.html" %}
+{% from "admin/macros.html" import flash_messages, render_field, fuzzy_select_script %}
+
+{% block title %}{% if read_only %}View{% else %}Edit{% endif %} {{ model_name }}{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl">
+  <div class="mb-6">
+    <h1 class="text-3xl font-bold text-slate-800">{% if read_only %}View{% else %}Edit{% endif %} {{ model_name }}</h1>
+    <p class="text-slate-600 mt-1">ID: {{ item_id }}{% if read_only %} <span class="text-amber-600">🔒 Read-only</span>{% endif %}</p>
+  </div>
+
+  {{ flash_messages() }}
+
+  <form method="POST" class="bg-white rounded-lg border border-slate-200 p-6">
+    {{ form.csrf_token }}
+    {% for field in form if field.name != 'csrf_token' %}
+      {{ render_field(field, read_only=read_only, fk_target=fk_map.get(field.name)) }}
+    {% endfor %}
+
+    <div class="flex gap-3 pt-4 border-t border-slate-200">
+      {% if not read_only %}
+      <button type="submit" class="px-4 py-2 bg-sky-600 text-white rounded hover:bg-sky-700 transition">
+        Save changes
+      </button>
+      {% endif %}
+      <a href="{{ url_for('admin.list_model', model_name=model_name) }}"
+         class="px-4 py-2 bg-slate-200 text-slate-700 rounded hover:bg-slate-300 transition">
+        {% if read_only %}Back{% else %}Cancel{% endif %}
+      </a>
+    </div>
+  </form>
+
+  <form class="border border-red-100 p-4 text-right my-4"
+    method="POST" action="{{ url_for('admin.delete_model', model_name=model_name, item_id=item_id) }}" onsubmit="return confirm('Are you sure you want to delete this {{ model_name }}? This action cannot be undone.');">
+    {{ form.csrf_token }}
+    <button type="submit" class="px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition">
+      Delete
+    </button>
+  </form>
+</div>
+
+{{ fuzzy_select_script() }}
+{% endblock %}

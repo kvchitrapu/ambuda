@@ -1,0 +1,99 @@
+{% extends "admin/base.html" %}
+
+{% block title %}Celery Tasks{% endblock %}
+
+{% block content %}
+<div class="max-w-full">
+  <div class="flex items-center justify-between mb-6">
+    <div>
+      <h1 class="text-3xl font-bold text-slate-800">Celery Tasks</h1>
+      <p class="text-slate-600 mt-1">{{ total }} total records</p>
+    </div>
+    <div>
+      <form method="GET" class="flex gap-2 items-center">
+        <select name="status" onchange="this.form.submit()" class="px-3 py-2 border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-purple-500">
+          <option value="" {% if not status_filter %}selected{% endif %}>All statuses</option>
+          {% for s in ["PENDING", "STARTED", "SUCCESS", "FAILURE"] %}
+          <option value="{{ s }}" {% if status_filter == s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </form>
+    </div>
+  </div>
+
+  <div class="bg-white rounded-lg shadow overflow-hidden">
+    <table class="min-w-full divide-y divide-slate-200">
+      <thead class="bg-slate-50">
+        <tr>
+          <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Status</th>
+          <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Task Name</th>
+          <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Initiated By</th>
+          <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Started At</th>
+          <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Duration</th>
+          <th class="px-4 py-3 text-left text-xs font-medium text-slate-500 uppercase">Error</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-slate-200">
+        {% for item in items %}
+        <tr class="hover:bg-slate-50">
+          <td class="px-4 py-3 whitespace-nowrap">
+            {% if item.status == "SUCCESS" %}
+            <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">SUCCESS</span>
+            {% elif item.status == "FAILURE" %}
+            <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-red-100 text-red-800">FAILURE</span>
+            {% elif item.status == "STARTED" %}
+            <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-blue-100 text-blue-800">STARTED</span>
+            {% elif item.status == "PENDING" %}
+            <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-yellow-100 text-yellow-800">PENDING</span>
+            {% else %}
+            <span class="inline-flex px-2 py-1 text-xs font-semibold rounded-full bg-slate-100 text-slate-800">{{ item.status }}</span>
+            {% endif %}
+          </td>
+          <td class="px-4 py-3">
+            <a href="{{ url_for('admin.celery_task_detail', task_log_id=item.id) }}" class="text-sky-600 hover:underline">
+              {{ item.task_name.split('.')[-1] }}
+            </a>
+          </td>
+          <td class="px-4 py-3 text-slate-600">{{ item.initiated_by or "-" }}</td>
+          <td class="px-4 py-3 text-slate-600 whitespace-nowrap">
+            {% if item.started_at %}
+            {{ item.started_at.strftime("%Y-%m-%d %H:%M:%S") }}
+            {% else %}-{% endif %}
+          </td>
+          <td class="px-4 py-3 text-slate-600 whitespace-nowrap">
+            {% if item.duration_sec is not none %}
+            {{ "%.1f"|format(item.duration_sec) }}s
+            {% else %}-{% endif %}
+          </td>
+          <td class="px-4 py-3 text-slate-600">
+            {% if item.error_message %}
+            <a href="{{ url_for('admin.celery_task_detail', task_log_id=item.id) }}" class="text-red-600 hover:underline" title="{{ item.error_message }}">
+              {{ item.error_message[:60] }}{% if item.error_message|length > 60 %}...{% endif %}
+            </a>
+            {% else %}-{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="6" class="px-4 py-8 text-center text-slate-500">No task logs found.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if total_pages > 1 %}
+  <div class="flex justify-center mt-6 gap-2">
+    {% if page > 1 %}
+    <a href="?page={{ page - 1 }}{% if status_filter %}&status={{ status_filter }}{% endif %}"
+       class="px-3 py-2 bg-white border border-slate-300 rounded hover:bg-slate-50">Previous</a>
+    {% endif %}
+    <span class="px-3 py-2 text-slate-600">Page {{ page }} of {{ total_pages }}</span>
+    {% if page < total_pages %}
+    <a href="?page={{ page + 1 }}{% if status_filter %}&status={{ status_filter }}{% endif %}"
+       class="px-3 py-2 bg-white border border-slate-300 rounded hover:bg-slate-50">Next</a>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

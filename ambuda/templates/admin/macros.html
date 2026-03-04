@@ -1,46 +1,300 @@
-{% import "macros/forms.html" as mf %}
-
-
-{# Show models in the menu bar. #}
-{% macro nav_menu(admin_view) %}
-  <ul class="flex items-center a-hover-underline">
-  {% for item in admin_view.admin.menu() %}
-    {% if item.is_accessible() and item.is_visible() %}
-      {% set url = item.get_url() %}
-      {% set active = item.is_active(admin_view) %}
-      <li>
-        <a class="block p-2" href="{{ url }}">{{ item.name }}</a>
-      </li>
-    {% endif %}
-  {% endfor %}
-  </ul>
+{% macro pagination(model_name, page, total_pages, sort='', sort_dir='', search='') %}
+  {% if total_pages > 1 %}
+  <div class="px-4 py-3 flex items-center justify-between">
+    <div class="text-sm text-slate-600">
+      Page {{ page }} of {{ total_pages }}
+    </div>
+    <div class="flex gap-2">
+      {% if page > 1 %}
+      <a href="{{ url_for('admin.list_model', model_name=model_name, page=page-1, sort=sort, sort_dir=sort_dir, search=search) }}"
+         class="px-3 py-1 border border-slate-300 rounded hover:bg-slate-50 text-sm">
+        Previous
+      </a>
+      {% endif %}
+      {% if page < total_pages %}
+      <a href="{{ url_for('admin.list_model', model_name=model_name, page=page+1, sort=sort, sort_dir=sort_dir, search=search) }}"
+         class="px-3 py-1 border border-slate-300 rounded hover:bg-slate-50 text-sm">
+        Next
+      </a>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
 {% endmacro %}
 
-
-{# Show flashed messages #}
-{% macro messages() %}
-  {% with messages = get_flashed_messages(with_categories=True) %}
+{#- Flash message display macro -#}
+{% macro flash_messages() %}
+  {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
-      {% for category, m in messages %}
-        {% set mapping = {
-            'error': 'bg-red-200 text-red-800',
-            'message': 'bg-yellow-200 text-yellow-800',
-            'success': 'bg-green-200 text-green-800',
-        } %}
-        <div class="p-2 {{ mapping.get(category, "") }} my-4 alert-dismissable">
-          {{ m }}
+      {% for category, message in messages %}
+        <div class="mb-4 p-3 rounded text-sm {% if category == 'success' %}bg-green-100 text-green-800{% else %}bg-red-100 text-red-800{% endif %}">
+          {{ message }}
         </div>
       {% endfor %}
     {% endif %}
   {% endwith %}
 {% endmacro %}
 
+{#- Render a form field with appropriate styling -#}
+{% macro render_field(field, read_only=false, fk_target=none) %}
+  <div class="mb-4">
+    <label for="{{ field.id }}" class="block text-sm font-semibold text-slate-700 mb-1">
+      {{ field.label.text }}
+      {% if fk_target %}
+        <a href="{{ url_for('admin.create_model', model_name=fk_target) }}"
+           class="ml-1 text-sky-600 hover:text-sky-700 font-bold text-base"
+           title="Create new {{ fk_target }}"
+           target="_blank">+</a>
+      {% endif %}
+    </label>
 
-{% macro create_buttons() %}
-<div class="mt-4">
-  {{ mf.submit("Save") }}
-  <input name="_add_another" type="submit"
-      class="btn border border-black transition hover:bg-slate-300"
-      value="Save and add another" />
-</div>
+    {% if field.type == 'TextAreaField' %}
+      {{ field(class="w-full px-3 py-2 border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-sky-500", rows=5, disabled=read_only) }}
+    {% elif field.type == 'BooleanField' %}
+      <div class="flex items-center">
+        {{ field(class="w-4 h-4 text-sky-600 border-slate-300 rounded focus:ring-sky-500", disabled=read_only) }}
+        <span class="ml-2 text-sm text-slate-600">{{ field.label.text }}</span>
+      </div>
+    {% elif field.type == 'SelectField' %}
+      {% if fk_target and not read_only %}
+        <div class="fuzzy-select-wrapper relative" data-field-id="{{ field.id }}">
+          <input type="text"
+                 class="fuzzy-select-input w-full px-3 py-2 border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-sky-500"
+                 placeholder="Type to search..."
+                 autocomplete="off">
+          {{ field(class="fuzzy-select-hidden", style="position: absolute; left: -9999px;") }}
+          <div class="fuzzy-select-dropdown hidden absolute z-50 w-full mt-1 bg-white border border-slate-300 rounded shadow-lg max-h-60 overflow-auto"></div>
+        </div>
+      {% else %}
+        {{ field(class="w-full px-3 py-2 border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-sky-500", disabled=read_only) }}
+      {% endif %}
+    {% elif field.type == 'SelectMultipleField' %}
+      <div class="text-xs text-slate-500 mb-1">Hold <kbd>Ctrl</kbd> (<kbd>Cmd</kbd> on Mac) to select multiple items</div>
+      {{ field(class="w-full px-3 py-2 border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-sky-500", disabled=read_only) }}
+    {% elif field.type == 'DateTimeLocalField' %}
+      <div class="text-xs text-slate-500 mb-1">Enter time in UTC</div>
+      {{ field(type="datetime-local", class="w-full px-3 py-2 border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-sky-500", disabled=read_only) }}
+    {% else %}
+      {{ field(class="w-full px-3 py-2 border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-sky-500", disabled=read_only) }}
+    {% endif %}
+
+    {% if field.errors %}
+      {% for error in field.errors %}
+        <p class="mt-1 text-sm text-red-600">{{ error }}</p>
+      {% endfor %}
+    {% endif %}
+  </div>
+{% endmacro %}
+
+{#- Dynamic file metadata fields JavaScript -#}
+{% macro file_metadata_script(file_input_id, slug_label='Slug', title_label='Title') %}
+<script>
+  (function() {
+    const fileInput = document.getElementById('{{ file_input_id }}');
+    const container = document.getElementById('file-metadata-container');
+
+    function deriveSlug(filename) {
+      return filename.replace(/\.xml$/i, '');
+    }
+
+    function deriveTitle(slug) {
+      return slug.replace(/[-_]/g, ' ')
+        .split(' ')
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+        .join(' ');
+    }
+
+    function updateFileMetadataFields() {
+      const files = fileInput.files;
+
+      if (files.length === 0) {
+        container.classList.add('hidden');
+        container.innerHTML = '';
+        return;
+      }
+
+      container.classList.remove('hidden');
+      container.innerHTML = '';
+
+      Array.from(files).forEach((file, index) => {
+        const slug = deriveSlug(file.name);
+        const title = deriveTitle(slug);
+
+        const fieldGroup = document.createElement('div');
+        fieldGroup.className = 'bg-slate-50 border border-slate-200 rounded-lg p-4';
+        fieldGroup.innerHTML = `
+          <div class="mb-3">
+            <p class="text-sm font-semibold text-slate-700 mb-2">File: ${file.name}</p>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label for="slug_${index}" class="block text-xs font-semibold text-slate-700 mb-1">
+                {{ slug_label }}
+              </label>
+              <input
+                type="text"
+                id="slug_${index}"
+                name="slug_${index}"
+                value="${slug}"
+                required
+                class="w-full px-3 py-2 text-sm border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+            </div>
+            <div>
+              <label for="title_${index}" class="block text-xs font-semibold text-slate-700 mb-1">
+                {{ title_label }}
+              </label>
+              <input
+                type="text"
+                id="title_${index}"
+                name="title_${index}"
+                value="${title}"
+                required
+                class="w-full px-3 py-2 text-sm border border-slate-300 rounded focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+            </div>
+          </div>
+        `;
+        container.appendChild(fieldGroup);
+      });
+    }
+
+    fileInput.addEventListener('change', updateFileMetadataFields);
+  })();
+</script>
+{% endmacro %}
+
+{#- Fuzzy select autocomplete script -#}
+{% macro fuzzy_select_script() %}
+<script>
+(function() {
+  function initFuzzySelect(wrapper) {
+    const input = wrapper.querySelector('.fuzzy-select-input');
+    const select = wrapper.querySelector('.fuzzy-select-hidden');
+    const dropdown = wrapper.querySelector('.fuzzy-select-dropdown');
+
+    if (!input || !select || !dropdown) return;
+
+    // Build options array from select
+    const options = Array.from(select.options).map(opt => ({
+      value: opt.value,
+      text: opt.text,
+      selected: opt.selected
+    }));
+
+    // Set initial value
+    const selectedOption = options.find(opt => opt.selected);
+    if (selectedOption && selectedOption.value !== '') {
+      input.value = selectedOption.text;
+    }
+
+    // Fuzzy match function
+    function fuzzyMatch(str, pattern) {
+      if (!pattern) return true;
+
+      str = str.toLowerCase();
+      pattern = pattern.toLowerCase();
+
+      // Simple fuzzy match: check if all characters in pattern appear in order
+      let patternIdx = 0;
+      for (let i = 0; i < str.length && patternIdx < pattern.length; i++) {
+        if (str[i] === pattern[patternIdx]) {
+          patternIdx++;
+        }
+      }
+      return patternIdx === pattern.length;
+    }
+
+    // Render dropdown
+    function renderDropdown(query) {
+      const filtered = options.filter(opt =>
+        opt.value !== '' && fuzzyMatch(opt.text, query)
+      );
+
+      if (filtered.length === 0) {
+        dropdown.innerHTML = '<div class="px-3 py-2 text-slate-500 text-sm">No matches found</div>';
+      } else {
+        dropdown.innerHTML = filtered.map((opt, idx) =>
+          `<div class="fuzzy-select-option px-3 py-2 cursor-pointer hover:bg-sky-100 ${idx === 0 ? 'bg-slate-50' : ''}"
+                data-value="${opt.value}">${opt.text}</div>`
+        ).join('');
+      }
+
+      dropdown.classList.remove('hidden');
+    }
+
+    // Select option
+    function selectOption(value, text) {
+      select.value = value;
+      input.value = text;
+      dropdown.classList.add('hidden');
+    }
+
+    // Event listeners
+    input.addEventListener('focus', function() {
+      renderDropdown(input.value);
+    });
+
+    input.addEventListener('input', function() {
+      renderDropdown(input.value);
+    });
+
+    input.addEventListener('keydown', function(e) {
+      const highlighted = dropdown.querySelector('.bg-slate-50');
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (highlighted && highlighted.nextElementSibling) {
+          highlighted.classList.remove('bg-slate-50');
+          highlighted.nextElementSibling.classList.add('bg-slate-50');
+          highlighted.nextElementSibling.scrollIntoView({ block: 'nearest' });
+        }
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (highlighted && highlighted.previousElementSibling) {
+          highlighted.classList.remove('bg-slate-50');
+          highlighted.previousElementSibling.classList.add('bg-slate-50');
+          highlighted.previousElementSibling.scrollIntoView({ block: 'nearest' });
+        }
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (highlighted) {
+          selectOption(highlighted.dataset.value, highlighted.textContent);
+        }
+      } else if (e.key === 'Escape') {
+        dropdown.classList.add('hidden');
+      }
+    });
+
+    dropdown.addEventListener('click', function(e) {
+      const option = e.target.closest('.fuzzy-select-option');
+      if (option) {
+        selectOption(option.dataset.value, option.textContent);
+      }
+    });
+
+    dropdown.addEventListener('mouseover', function(e) {
+      const option = e.target.closest('.fuzzy-select-option');
+      if (option) {
+        dropdown.querySelectorAll('.fuzzy-select-option').forEach(opt =>
+          opt.classList.remove('bg-slate-50')
+        );
+        option.classList.add('bg-slate-50');
+      }
+    });
+
+    // Close dropdown when clicking outside
+    document.addEventListener('click', function(e) {
+      if (!wrapper.contains(e.target)) {
+        dropdown.classList.add('hidden');
+      }
+    });
+  }
+
+  // Initialize all fuzzy selects
+  document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('.fuzzy-select-wrapper').forEach(initFuzzySelect);
+  });
+})();
+</script>
 {% endmacro %}

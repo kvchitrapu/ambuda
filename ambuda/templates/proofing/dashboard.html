@@ -1,46 +1,70 @@
-{% extends 'proofing/base-sidebar.html' %}
+{% extends 'proofing/base.html' %}
 {% import "macros/components.html" as mc %}
 {% import "macros/proofing.html" as m %}
 
-
-{% macro _number(n, label) %}
-<li class="flex-1">
-  <div class="font-bold text-3xl">{{ n }}</div>
-  <div class="text-slate-500 text-sm">{{ label }}</div>
-</li>
-{% endmacro %}
-
-
-{% block title %}{{ mc.title(_('Dashboard')) }}{% endblock %}
-
-
-{% block sidebar %}{{ m.main_nav('projects', current_user=current_user) }}{% endblock %}
-
+{% block title %}{{ mc.title(_('Proofing Dashboard')) }}{% endblock %}
 
 {% block content %}
-{{ m.title_and_subtitle(
-    "Dashboard",
-    "A summary of our proofing work") }}
+<div class="flex items-center justify-between mb-2 md:mt-12">
+  <header class="prose"><h1 class="md:!mt-0">{{ _('Dashboard') }}</h1></header>
+  {% if current_user.is_authenticated and current_user.is_p2 %}
+  <a href="{{ url_for('proofing.create_project') }}" class="px-4 py-2 rounded bg-sky-700 text-white font-medium text-sm hover:bg-sky-800 no-underline">{{ _('New project') }}</a>
+  {% endif %}
+</div>
+{{ m.proofing_tabs('dashboard', current_user) }}
+
+{% if current_user.is_authenticated and current_user.is_p2 %}
+<div class="flex items-center gap-4 mb-8">
+  <a href="{{ url_for('proofing.index', status='pending') }}" class="bg-white border border-gray-200 rounded-lg p-6 shadow-sm hover:bg-gray-50 text-center flex-1">
+    <h2 class="text-2xl font-bold text-gray-900">{{ num_pending_projects }}</h2>
+    <p class="text-gray-600 mt-1">{{ _('Pending projects') }}</p>
+  </a>
+  <span class="text-2xl text-gray-300">&rarr;</span>
+  <a href="{{ url_for('proofing.index', status='active') }}" class="bg-white border border-gray-200 rounded-lg p-6 shadow-sm hover:bg-gray-50 text-center flex-1">
+    <h2 class="text-2xl font-bold text-gray-900">{{ num_active_projects }}</h2>
+    <p class="text-gray-600 mt-1">{{ _('Active projects') }}</p>
+  </a>
+  <span class="text-2xl text-gray-300">&rarr;</span>
+  <a href="{{ url_for('proofing.texts') }}" class="bg-white border border-gray-200 rounded-lg p-6 shadow-sm hover:bg-gray-50 text-center flex-1">
+    <h2 class="text-2xl font-bold text-gray-900">{{ num_texts }}</h2>
+    <p class="text-gray-600 mt-1">{{ _('Published texts') }}</p>
+    <p class="text-xs text-slate-400 mt-1">{{ _('Last 30 days: %(published)s published, %(created)s created', published=num_texts_published_30d, created=num_texts_created_30d) }}</p>
+  </a>
+</div>
+{% else %}
+<div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+  <div class="bg-white border border-gray-200 rounded-lg p-6 shadow-sm">
+    <h2 class="text-2xl font-bold text-gray-900">{{ num_active_projects }}</h2>
+    <p class="text-gray-600 mt-1">{{ _('Active projects') }}</p>
+    <a href="{{ url_for('proofing.index') }}" class="text-sky-900 hover:underline text-sm mt-2 inline-block">{{ _('View all') }} &rarr;</a>
+  </div>
+  <div class="bg-white border border-gray-200 rounded-lg p-6 shadow-sm">
+    <h2 class="text-2xl font-bold text-gray-900">{{ num_texts }}</h2>
+    <p class="text-gray-600 mt-1">{{ _('Published texts') }}</p>
+    <a href="{{ url_for('proofing.texts') }}" class="text-sky-900 hover:underline text-sm mt-2 inline-block">{{ _('View all') }} &rarr;</a>
+  </div>
+</div>
+{% endif %}
 
 <div class="prose">
-<h2>Revisions</h2>
+  <h2>{{ _('Quick Links') }}</h2>
+  <ul>
+    <li><a href="{{ url_for('proofing.recent_changes') }}" class="text-sky-900 hover:underline">{{ _('Activity') }}</a></li>
+  </ul>
 </div>
 
-<ul class="flex text-center justify-between">
-  {{ _number(num_revisions_30d, "Last 30 days") }}
-  {{ _number(num_revisions_7d, "Last 7 days") }}
-  {{ _number(num_revisions_1d, "Last 1 day") }}
-</ul>
-
-
-<div class="prose">
-<h2>Contributors</h2>
+{% if my_projects %}
+<div class="mt-8">
+  <h2 class="font-bold text-xl mb-3">{{ _('My Recent Projects') }}</h2>
+  <ul class="a-hover-underline space-y-1">
+    {% for p in my_projects %}
+    <li>
+      <a href="{{ url_for('proofing.project.summary', slug=p.slug) }}">{{ p.display_title }}</a>
+    </li>
+    {% endfor %}
+  </ul>
 </div>
+{% endif %}
 
-<ul class="flex text-center justify-between">
-  {{ _number(num_contributors_30d, "Last 30 days") }}
-  {{ _number(num_contributors_7d, "Last 7 days") }}
-  {{ _number(num_contributors_1d, "Last 1 day") }}
-</ul>
 
 {% endblock %}

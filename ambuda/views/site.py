@@ -1,16 +1,22 @@
 """Views for basic site pages."""
 
-from flask import Blueprint, redirect, render_template, session, url_for
+from flask import Blueprint, redirect, render_template, request, session, url_for
 
 from ambuda import queries as q
 from ambuda.consts import LOCALES
+from ambuda.utils import text_utils
+from vidyut.lipi import transliterate, Scheme
 
 bp = Blueprint("site", __name__)
 
 
 @bp.route("/")
 def index():
-    return render_template("index.html")
+    grouped_entries = text_utils.create_grouped_text_entries()
+    recent_texts = text_utils.create_recent_text_entries()
+    return render_template(
+        "index.html", grouped_entries=grouped_entries, recent_texts=recent_texts
+    )
 
 
 @bp.route("/contact")
@@ -63,6 +69,12 @@ def request_too_large(e):
 @bp.app_errorhandler(500)
 def internal_server_error(e):
     return render_template("500.html"), 500
+
+
+@bp.route("/script/<slug>")
+def set_script(slug=None):
+    session["script"] = slug
+    return redirect(request.referrer or url_for("site.index"))
 
 
 @bp.route("/language/<slug>")

@@ -1,0 +1,33 @@
+<header class="mb-4">
+  <h2 class="text-xl font-medium">{{ dhatu_entry.dhatu.aupadeshika|md }}</h2>
+  <p class="text-slate-500 text-sm">
+    {{ (dhatu_entry.dhatu.gana|v_gloss).en_long }}
+    &middot;
+    {{ dhatu_entry.artha|md }}
+  </p>
+</header>
+
+{% for lakara in tinantas %}
+  <section class="flex gap-2 mb-4">
+  {% for table in lakara if table %}
+    <table class="table-fixed w-full border text-sm">
+      <caption class="text-left text-xs font-bold p-1.5 bg-slate-100 text-slate-400">
+        {{ table.prayoga|md }} {{ table.lakara|md }}
+      </caption>
+      <tbody>
+        {% for row in table.rows %}
+          <tr class="border-b">
+          {% for padas in row %}
+            <td class="p-1.5">
+            {% for pada in padas %}
+              {{ pada.text|md }}{% if not loop.last %}, {% endif %}
+            {% endfor %}
+            </td>
+          {% endfor %}
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% endfor %}
+  </section>
+{% endfor %}

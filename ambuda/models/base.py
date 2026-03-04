@@ -1,11 +1,13 @@
 """Base model and utilities."""
 
 from sqlalchemy import Column, ForeignKey, Integer
-from sqlalchemy.orm import declarative_base
+from sqlalchemy.orm import DeclarativeBase
+
 
 #: The base class for all of Ambuda's models. All new models should inherit
 #: from this class.
-Base = declarative_base()
+class Base(DeclarativeBase):
+    pass
 
 
 def pk():
@@ -13,9 +15,9 @@ def pk():
     return Column(Integer, primary_key=True, autoincrement=True)
 
 
-def foreign_key(field: str):
+def foreign_key(field: str, nullable=False):
     """Define a simple foreign key."""
-    return Column(Integer, ForeignKey(field), nullable=False, index=True)
+    return Column(Integer, ForeignKey(field), nullable=nullable, index=True)
 
 
 def same_as(column_name: str):

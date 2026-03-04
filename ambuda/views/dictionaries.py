@@ -11,16 +11,14 @@ A source list is valid iff all of the following conditions are met:
 If a source list is invalid, we raise a 404 error.
 """
 
-
 import functools
 
-from flask import Blueprint, abort, redirect, render_template, request, url_for
-from indic_transliteration import detect, sanscript
+from flask import Blueprint, abort, redirect, render_template, request, session, url_for
+from vidyut.lipi import detect, transliterate, Scheme
 
 import ambuda.queries as q
 from ambuda.utils import xml
 from ambuda.utils.dict_utils import expand_apte_keys, expand_skd_keys, standardize_key
-from ambuda.views.api import bp as api
 
 bp = Blueprint("dictionaries", __name__)
 
@@ -32,8 +30,8 @@ def _get_dictionary_data() -> dict[str, str]:
 
 def _create_query_keys(sources: list[str], query: str) -> list[str]:
     query = query.strip()
-    input_scheme = detect.detect(query)
-    slp1_key = sanscript.transliterate(query, input_scheme, sanscript.SLP1)
+    input_scheme = detect(query)
+    slp1_key = transliterate(query, input_scheme, Scheme.Slp1)
 
     slp1_key = standardize_key(slp1_key)
     keys = [slp1_key]
@@ -136,6 +134,14 @@ def entry(sources, query):
         abort(404)
 
     entries = _fetch_entries(sources, query)
+
+    scheme = _get_user_scheme()
+    if scheme != Scheme.Devanagari:
+        entries = {
+            slug: [xml.transliterate_html(e, Scheme.Devanagari, scheme) for e in blobs]
+            for slug, blobs in entries.items()
+        }
+
     return render_template(
         "dictionaries/index.html",
         query=query,
@@ -144,17 +150,8 @@ def entry(sources, query):
     )
 
 
-@api.route("/dictionaries/<list:sources>/<query>")
-def entry_htmx(sources, query):
-    dictionaries = _get_dictionary_data()
-    sources = [s for s in sources if s in dictionaries]
-    if not sources:
-        abort(404)
-
-    entries = _fetch_entries(sources, query)
-    return render_template(
-        "htmx/dictionary-results.html",
-        query=query,
-        entries=entries,
-        dictionaries=dictionaries,
-    )
+def _get_user_scheme() -> Scheme:
+    try:
+        return Scheme.from_string(session.get("script", "Devanagari"))
+    except ValueError:
+        return Scheme.Devanagari

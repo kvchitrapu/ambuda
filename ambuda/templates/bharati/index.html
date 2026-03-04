@@ -1,0 +1,46 @@
+{% extends 'header-main-footer.html' %}
+
+
+{% block title %}Bharati{% endblock %}
+
+
+{% macro ex(text) -%}
+{%- set dev = text|d -%}
+<a href="{{ url_for('bharati.index', q=dev) }}">{{ dev }}</a>
+{%- endmacro %}
+
+
+{% block main %}
+<article class="mx-4 md:mx-auto max-w-2xl md:mt-12 mb-24 md:mb-36">
+<header>
+  <h1 class="text-center text-4xl md:text-6xl font-bold text-slate-700 my-8">
+    {{ 'bhAratI'|d }}
+  </h1>
+</header>
+<div x-data="bharati">
+  <form>
+    <div class="flex mb-2 drop-shadow-sm">
+      <input
+        name="q"
+          type="text"
+          class="border border-slate-200 text-lg p-2 flex-1 bg-slate-100 text-slate-900 rounded-tl rounded-bl placeholder:text-slate-400"
+          x-model="query"></input>
+      <input type="submit" value="{{ _('Search') }}"
+          class="cursor-pointer btn-submit p-2 rounded-tr rounded-br"></input>
+    </div>
+  </form>
+
+  <section class="prose mt-8 mx-auto a-hover-underline">
+    Bharati is a smart Sanskrit dictionary. To see what Bharati can do, click one
+    of the examples below:
+    </p>
+
+    <ul>
+      <li>{{ ex("bhU") }}, {{ ex("udbhavati") }}, {{ ex("bhavantam") }}, {{ ex("sambabhUva") }}</li>
+      <li>{{ ex("deva") }}, {{ ex("devasya") }}</li>
+    </ul>
+  </section>
+
+</div>
+</article>
+{% endblock %}

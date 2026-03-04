@@ -1,4 +1,6 @@
 import tempfile
+from pathlib import Path
+from unittest.mock import patch
 
 import fitz
 
@@ -8,7 +10,7 @@ import ambuda.tasks.utils
 
 
 def _create_sample_pdf(output_path: str, num_pages: int):
-    """Create a toy PDF with 10 pages."""
+    """Create a toy PDF with the given number of pages."""
     doc = fitz.open()
     for i in range(1, num_pages + 1):
         page = doc.new_page()
@@ -17,23 +19,98 @@ def _create_sample_pdf(output_path: str, num_pages: int):
     doc.save(output_path)
 
 
-def test_create_project_inner(flask_app):
+def _fake_save_page_image(pdf_path, page_index, output_path, dpi=200):
+    """Write a tiny placeholder file instead of rendering a real page image."""
+    Path(output_path).write_bytes(b"\xff\xd8\xff\xe0")
+
+
+@patch.object(projects, "_save_page_image", _fake_save_page_image)
+def test_create_project_inner(flask_app, s3_mocks):
     with flask_app.app_context():
-        project = q.project("cool-project")
+        from ambuda.queries import get_engine
+
+        project = q.project("test-cool-project")
         assert project is None
 
         f = tempfile.NamedTemporaryFile()
         _create_sample_pdf(f.name, num_pages=10)
 
-        projects.create_project_inner(
-            display_title="Cool project",
+        # Pass the Flask app's engine to share the same :memory: database
+        engine = get_engine()
+
+        projects.create_project_from_local_pdf_inner(
+            display_title="Test cool project",
             pdf_path=f.name,
-            output_dir=flask_app.config["UPLOAD_FOLDER"],
             app_environment=flask_app.config["AMBUDA_ENVIRONMENT"],
             creator_id=1,
             task_status=ambuda.tasks.utils.LocalTaskStatus(),
+            engine=engine,
         )
 
-        project = q.project("cool-project")
+        project = q.project("test-cool-project")
         assert project
         assert len(project.pages) == 10
+
+
+def _create_project_for_replace(flask_app, slug, num_pages):
+    from ambuda.queries import get_engine
+
+    f = tempfile.NamedTemporaryFile(suffix=".pdf")
+    _create_sample_pdf(f.name, num_pages=num_pages)
+    engine = get_engine()
+
+    projects.create_project_from_local_pdf_inner(
+        display_title=slug,
+        pdf_path=f.name,
+        app_environment=flask_app.config["AMBUDA_ENVIRONMENT"],
+        creator_id=1,
+        task_status=ambuda.tasks.utils.LocalTaskStatus(),
+        engine=engine,
+    )
+    return q.project(slug), engine
+
+
+@patch.object(projects, "_save_page_image", _fake_save_page_image)
+def test_replace_project_pdf_inner(flask_app, s3_mocks):
+    with flask_app.app_context():
+        project, engine = _create_project_for_replace(flask_app, "replace-longer", 5)
+        assert len(project.pages) == 5
+        original_uuids = [p.uuid for p in project.pages]
+
+        f = tempfile.NamedTemporaryFile(suffix=".pdf")
+        _create_sample_pdf(f.name, num_pages=8)
+
+        projects.replace_project_pdf_inner(
+            project_slug="replace-longer",
+            pdf_path=f.name,
+            app_environment=flask_app.config["AMBUDA_ENVIRONMENT"],
+            task_status=ambuda.tasks.utils.LocalTaskStatus(),
+            engine=engine,
+        )
+
+        q.get_session().expire_all()
+        project = q.project("replace-longer")
+        assert len(project.pages) == 8
+        for i in range(5):
+            assert project.pages[i].uuid == original_uuids[i]
+
+
+@patch.object(projects, "_save_page_image", _fake_save_page_image)
+def test_replace_project_pdf_inner__shorter(flask_app, s3_mocks):
+    with flask_app.app_context():
+        project, engine = _create_project_for_replace(flask_app, "replace-shorter", 5)
+        assert len(project.pages) == 5
+
+        f = tempfile.NamedTemporaryFile(suffix=".pdf")
+        _create_sample_pdf(f.name, num_pages=3)
+
+        projects.replace_project_pdf_inner(
+            project_slug="replace-shorter",
+            pdf_path=f.name,
+            app_environment=flask_app.config["AMBUDA_ENVIRONMENT"],
+            task_status=ambuda.tasks.utils.LocalTaskStatus(),
+            engine=engine,
+        )
+
+        project = q.project("replace-shorter")
+        assert len(project.pages) == 5

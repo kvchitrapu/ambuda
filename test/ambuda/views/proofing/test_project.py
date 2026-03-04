@@ -1,5 +1,8 @@
+import json
+from unittest.mock import patch
+
 import ambuda.queries as q
-from ambuda.database import Project
+from ambuda.database import Page, Project
 
 
 def test_summary(client):
@@ -107,81 +110,6 @@ def test_stats(moderator_client, rama_client):
     assert resp.status_code == 302
 
 
-def test_search(rama_client):
-    resp = rama_client.get("/proofing/test-project/search")
-    assert "Search:" in resp.text
-
-
-def test_search__bad_project(rama_client):
-    resp = rama_client.get("/proofing/unknown/search")
-    assert resp.status_code == 404
-
-
-def test_replace(moderator_client):
-    resp = moderator_client.get("/proofing/test-project/replace")
-    assert "Replace:" in resp.text
-
-
-def test_replace_post(moderator_client):
-    resp = moderator_client.post(
-        "/proofing/test-project/replace",
-        data={
-            "query": "the",
-            "replace": "the",
-        },
-    )
-    assert resp.status_code == 200
-
-
-def test_replace__unauth(client):
-    resp = client.get("/proofing/test-project/replace")
-    assert resp.status_code == 302
-
-
-def test_replace__bad_project(rama_client):
-    resp = rama_client.get("/proofing/unknown/replace")
-    assert resp.status_code == 404
-
-
-def test_submit_changes(moderator_client):
-    query = "test_query"
-    replace = "test_replace"
-    form_data = {"query": query, "replace": replace}
-    resp = moderator_client.post(
-        "/proofing/test-project/submit-changes", data=form_data
-    )
-    assert "Changes:" in resp.text
-
-
-def test_submit_changes_post(moderator_client):
-    resp = moderator_client.post(
-        "/proofing/test-project/submit-changes",
-        data={
-            "query": "the",
-            "replace": "the",
-            "matches": [],
-            "submit": True,
-        },
-    )
-
-    assert resp.status_code == 200
-
-
-def test_submit_unauth(client):
-    resp = client.get("/proofing/test-project/submit-changes")
-    assert resp.status_code == 302
-
-
-def test_confirm_changes(moderator_client):
-    resp = moderator_client.get("/proofing/test-project/confirm_changes")
-    assert "replace" in resp.text
-
-
-def test_confirm_unauth(client):
-    resp = client.get("/proofing/test-project/confirm_changes")
-    assert resp.status_code == 302
-
-
 def test_admin(moderator_client):
     session = q.get_session()
 
@@ -189,14 +117,16 @@ def test_admin(moderator_client):
     session.add(project)
     session.commit()
 
-    resp = moderator_client.post(
-        "/proofing/project-123/admin",
-        data={
-            "slug": "project-123",
-        },
-    )
-    # Redirect (to project index page) indicates success.
-    assert resp.status_code == 302
+    with patch("ambuda.tasks.projects.delete_project.apply_async") as mock_task:
+        resp = moderator_client.post(
+            "/proofing/project-123/admin",
+            data={
+                "slug": "project-123",
+            },
+        )
+        # Redirect (to project index page) indicates success.
+        assert resp.status_code == 302
+        mock_task.assert_called_once()
 
 
 def test_admin__slug_mismatch(moderator_client):
@@ -252,3 +182,132 @@ def test_batch_ocr(moderator_client):
 def test_batch_ocr__unauth(client):
     resp = client.get("/proofing/test-project/batch-ocr")
     assert resp.status_code == 302
+
+
+_reorder_counter = 0
+
+
+def _make_reorder_project():
+    global _reorder_counter
+    _reorder_counter += 1
+    session = q.get_session()
+    slug = f"reorder-proj-{_reorder_counter}"
+    project = Project(slug=slug, display_title="Reorder", board_id=0)
+    session.add(project)
+    session.flush()
+    status_id = q.project("test-project").pages[0].status_id
+    uuids = [
+        f"uuid-{_reorder_counter}-aaa",
+        f"uuid-{_reorder_counter}-bbb",
+        f"uuid-{_reorder_counter}-ccc",
+    ]
+    pages = [
+        Page(
+            project_id=project.id,
+            slug=f"r-{i}",
+            order=i,
+            status_id=status_id,
+            uuid=uuids[i],
+        )
+        for i in range(3)
+    ]
+    session.add_all(pages)
+    session.flush()
+    return project, pages, uuids
+
+
+def _post_json(client, url, data):
+    return client.post(url, data=json.dumps(data), content_type="application/json")
+
+
+def test_reorder_pages__get(rama_client):
+    resp = rama_client.get("/proofing/test-project/reorder-pages")
+    assert resp.status_code == 200
+    assert "Lock text to image" in resp.text
+
+
+def test_reorder_pages__unauth(client):
+    resp = client.get("/proofing/test-project/reorder-pages")
+    assert resp.status_code == 302
+
+
+def _get_pages(ids):
+    session = q.get_session()
+    return [session.get(Page, pid) for pid in ids]
+
+
+def test_reorder_pages__post_order(rama_client):
+    project, pages, uuids = _make_reorder_project()
+    ids = [p.id for p in pages]
+    resp = _post_json(
+        rama_client,
+        f"/proofing/{project.slug}/reorder-pages",
+        {
+            "page_ids": [ids[2], ids[0], ids[1]],
+        },
+    )
+    assert resp.json["ok"]
+    p0, p1, p2 = _get_pages(ids)
+    assert p2.order < p0.order < p1.order
+
+
+def test_reorder_pages__post_image_uuids(rama_client):
+    project, pages, uuids = _make_reorder_project()
+    ids = [p.id for p in pages]
+    resp = _post_json(
+        rama_client,
+        f"/proofing/{project.slug}/reorder-pages",
+        {
+            "page_ids": [ids[0], ids[1], ids[2]],
+            "image_uuids": [uuids[2], uuids[0], uuids[1]],
+        },
+    )
+    assert resp.json["ok"]
+    p0, p1, p2 = _get_pages(ids)
+    assert p0.uuid == uuids[2]
+    assert p1.uuid == uuids[0]
+    assert p2.uuid == uuids[1]
+
+
+def test_reorder_pages__invalid_page_ids(rama_client):
+    project, _, _ = _make_reorder_project()
+    resp = _post_json(
+        rama_client,
+        f"/proofing/{project.slug}/reorder-pages",
+        {
+            "page_ids": [999999],
+        },
+    )
+    assert resp.status_code == 400
+    assert "Invalid page IDs" in resp.json["error"]
+
+
+def test_reorder_pages__invalid_image_uuids(rama_client):
+    project, pages, uuids = _make_reorder_project()
+    ids = [p.id for p in pages]
+    resp = _post_json(
+        rama_client,
+        f"/proofing/{project.slug}/reorder-pages",
+        {
+            "page_ids": [ids[0], ids[1], ids[2]],
+            "image_uuids": [uuids[0], uuids[1], "uuid-FAKE"],
+        },
+    )
+    assert resp.status_code == 400
+    assert "Invalid image UUIDs" in resp.json["error"]
+
+
+def test_replace_pdf__unauth(client):
+    resp = client.get("/proofing/test-project/replace-pdf")
+    assert resp.status_code == 302
+
+
+def test_replace_pdf__auth_get(rama_client):
+    resp = rama_client.get("/proofing/test-project/replace-pdf")
+    assert resp.status_code == 200
+    assert "Replace PDF" in resp.text
+
+
+def test_replace_pdf__bad_project(rama_client):
+    resp = rama_client.get("/proofing/unknown/replace-pdf")
+    assert resp.status_code == 404

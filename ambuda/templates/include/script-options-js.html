@@ -1,0 +1,10 @@
+{% set current_script = session.get('script', 'devanagari') %}
+<option value="bengali" {{ 'selected' if current_script == 'bengali' }}>{{ _('Bengali') }}</option>
+<option value="devanagari" {{ 'selected' if current_script == 'devanagari' }}>{{ _('Devanagari') }}</option>
+<option value="iast" {{ 'selected' if current_script == 'iast' }}>{{ _('Roman') }}</option>
+<option value="gujarati" {{ 'selected' if current_script == 'gujarati' }}>{{ _('Gujarati') }}</option>
+<option value="gurmukhi" {{ 'selected' if current_script == 'gurmukhi' }}>{{ _('Gurmukhi') }}</option>
+<option value="kannada" {{ 'selected' if current_script == 'kannada' }}>{{ _('Kannada') }}</option>
+<option value="malayalam" {{ 'selected' if current_script == 'malayalam' }}>{{ _('Malayalam') }}</option>
+<option value="oriya" {{ 'selected' if current_script == 'oriya' }}>{{ _('Odia') }}</option>
+<option value="telugu" {{ 'selected' if current_script == 'telugu' }}>{{ _('Telugu') }}</option>

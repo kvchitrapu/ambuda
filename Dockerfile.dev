@@ -1,0 +1,44 @@
+FROM python:3.13-slim-bookworm
+
+# Prevent Python from writing .pyc files and enable unbuffered output
+ENV PYTHONFAULTHANDLER=1 \
+    PYTHONHASHSEED=random \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_DEFAULT_TIMEOUT=100
+
+WORKDIR /app
+
+# Install system dependencies including Node.js
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    git \
+    gcc \
+    g++ \
+    make \
+    python3-dev \
+    build-essential \
+    ca-certificates \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install uv
+
+# Dependency lock files.
+COPY pyproject.toml uv.lock ./
+COPY package.json package-lock.json tailwind.config.js ./
+
+# Install dependencies
+RUN uv pip install --system -e .
+RUN npm ci
+
+# Copy the rest of the application code
+# In development, most of this will be mounted as a volume
+COPY . .
+
+EXPOSE 5000
+
+# Default command (will be overridden by docker-compose for different services)
+CMD ["/bin/bash"]

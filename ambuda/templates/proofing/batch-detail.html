@@ -1,0 +1,17 @@
+{% extends 'proofing/base.html' %}
+{% import "macros/components.html" as mc %}
+{% import "macros/proofing.html" as m %}
+
+
+{% block title %}{{ mc.title(_('Batch %(id)s', id=batch_id)) }}{% endblock %}
+
+
+{% block content %}
+{{ m.header(_('Batch edit')) }}
+{{ m.proofing_tabs('recent-changes', current_user) }}
+
+<p class="text-slate-500 mb-4">{{ _('%(count)s pages edited', count=revisions|length) }}</p>
+
+{{ m.revision_list(revisions) }}
+
+{% endblock %}

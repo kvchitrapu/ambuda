@@ -10,7 +10,7 @@
 
 {% block content %}
 {{ m.project_header_nested('Download', project) }}
-{{ m.project_tabs(project=project, active='download', is_mod=current_user.is_moderator) }}
+{{ m.project_tabs(project=project, active='download', is_mod=current_user.is_moderator, is_p2=current_user.is_p2) }}
 
 <div class="prose">
   <p>{% trans %}
@@ -25,6 +25,9 @@
   </a></li>
   <li><a href="{{ url_for("proofing.project.download_as_xml", slug=project.slug) }}">
     {{ _('Download as TEI XML') }}
+  </a></li>
+  <li><a href="{{ url_for("proofing.project.download_as_epub", slug=project.slug) }}">
+    {{ _('Download as EPUB') }}
   </a></li>
 </ul>
 

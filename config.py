@@ -17,24 +17,26 @@ package: From the Flask docs (emphasis added):
 
 import logging
 import os
+from enum import StrEnum
 from pathlib import Path
 
 from dotenv import load_dotenv
-from flask import Flask
 
 # Load dotenv early so that `_env` will work in the class definitions below.
 load_dotenv()
 
-#: The test environment. For unit tests only.
-TESTING = "testing"
-#: The development environment. For local development.
-DEVELOPMENT = "development"
-#: The build environment. For build on github.
-BUILD = "build"
-#: The staging environment. For testing on staging.
-STAGING = "staging"
-#: The production environment. For production serving.
-PRODUCTION = "production"
+
+class Env(StrEnum):
+    #: The test environment. For unit tests only.
+    TESTING = "testing"
+    #: The development environment. For local development.
+    DEVELOPMENT = "development"
+    #: The build environment. For build on github.
+    BUILD = "build"
+    #: The staging environment. For testing on staging.
+    STAGING = "staging"
+    #: The production environment. For production serving.
+    PRODUCTION = "production"
 
 
 def _make_path(path: Path):
@@ -83,8 +85,20 @@ class BaseConfig:
     #: Where to store user uploads (PDFs, images, etc.).
     UPLOAD_FOLDER = _env("FLASK_UPLOAD_FOLDER")
 
+    MAX_CONTENT_LENGTH = 256 * 1024 * 1024
+
     #: Logger setup
     LOG_LEVEL = logging.INFO
+
+    # Cloud
+    S3_BUCKET = _env("S3_BUCKET")
+    CLOUDFRONT_BASE_URL = _env("CLOUDFRONT_BASE_URL")
+
+    # Vidyut extensions
+    VIDYUT_DATA_DIR = _env("VIDYUT_DATA_DIR")
+
+    # Local file cache for large artefacts (e.g. published XML).
+    SERVER_FILE_CACHE = _env("SERVER_FILE_CACHE")
 
     # Extensions
     # ----------
@@ -112,6 +126,12 @@ class BaseConfig:
 
     # Flask-WTF
 
+    # Flask-Limiter
+
+    #: Storage backend for rate limiting. Uses Redis in production, in-memory
+    #: for local development.
+    RATELIMIT_STORAGE_URI = _env("REDIS_URL", "memory://")
+
     #: If True, enable cross-site request forgery (CSRF) protection.
     #: This must be True in production.
     WTF_CSRF_ENABLED = True
@@ -121,6 +141,9 @@ class BaseConfig:
 
     #: ReCAPTCHA public key.
     RECAPTCHA_PUBLIC_KEY = _env("RECAPTCHA_PUBLIC_KEY")
+
+    #: Google Gemini API key for LLM-based text structuring.
+    GEMINI_API_KEY = _env("GEMINI_API_KEY")
 
     #: ReCAPTCHA private key.
     RECAPTCHA_PRIVATE_KEY = _env("RECAPTCHA_PRIVATE_KEY")
@@ -150,14 +173,22 @@ class BaseConfig:
     # so we don't need to define it on the Config object here.
 
 
-class UnitTestConfig(BaseConfig):
-    """For unit tests."""
+class UnitTestConfig:
+    """For unit tests.
 
-    AMBUDA_ENVIRONMENT = TESTING
+    For a clean test setup, don't inherit from BaseConfig."""
+
+    AMBUDA_ENVIRONMENT = Env.TESTING
     TESTING = True
     SECRET_KEY = "insecure unit test secret"
     SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
     UPLOAD_FOLDER = _make_path(Path(__file__).parent / "data" / "file-uploads")
+    MAX_CONTENT_LENGTH = 256 * 1024 * 1024
+    VIDYUT_DATA_DIR = "test-vidyut"
+    BABEL_DEFAULT_LOCALE = "en"
+
+    S3_BUCKET = "test-ambuda"
+    SERVER_FILE_CACHE = str(_make_path(Path(__file__).parent / "data" / "file-cache"))
 
     #: Logger setup
     LOG_LEVEL = logging.DEBUG
@@ -166,6 +197,10 @@ class UnitTestConfig(BaseConfig):
     #: doesn't have good support for it.
     WTF_CSRF_ENABLED = False
 
+    #: Disable rate limiting in tests so existing tests pass unchanged.
+    RATELIMIT_ENABLED = False
+    RATELIMIT_STORAGE_URI = "memory://"
+
     RECAPTCHA_PUBLIC_KEY = "re-public"
     RECAPTCHA_PRIVATE_KEY = "re-private"
 
@@ -173,7 +208,7 @@ class UnitTestConfig(BaseConfig):
 class DevelopmentConfig(BaseConfig):
     """For local development."""
 
-    AMBUDA_ENVIRONMENT = DEVELOPMENT
+    AMBUDA_ENVIRONMENT = Env.DEVELOPMENT
     DEBUG = True
     #: If set, automatically reload Flask templates (including imports) when
     #: they change on disk.
@@ -186,7 +221,7 @@ class DevelopmentConfig(BaseConfig):
 class BuildConfig(BaseConfig):
     """For build on GitHub."""
 
-    AMBUDA_ENVIRONMENT = BUILD
+    AMBUDA_ENVIRONMENT = Env.BUILD
     DEBUG = True
     #: If set, automatically reload Flask templates (including imports) when
     #: they change on disk.
@@ -199,8 +234,8 @@ class BuildConfig(BaseConfig):
 class StagingConfig(BaseConfig):
     """For staging."""
 
-    AMBUDA_ENVIRONMENT = STAGING
-    DEBUG = True
+    AMBUDA_ENVIRONMENT = Env.STAGING
+    DEBUG = False
     #: If set, automatically reload Flask templates (including imports) when
     #: they change on disk.
     TEMPLATES_AUTO_RELOAD = False
@@ -208,14 +243,22 @@ class StagingConfig(BaseConfig):
     #: Logger setup
     LOG_LEVEL = logging.INFO
 
+    SESSION_COOKIE_SECURE = True
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = "Lax"
+
 
 class ProductionConfig(BaseConfig):
     """For production."""
 
-    AMBUDA_ENVIRONMENT = PRODUCTION
+    AMBUDA_ENVIRONMENT = Env.PRODUCTION
 
     #: Logger setup
     LOG_LEVEL = logging.INFO
+
+    SESSION_COOKIE_SECURE = True
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = "Lax"
 
     # Deployment credentials
     # ----------------------
@@ -234,11 +277,11 @@ def _validate_config(config: BaseConfig):
     :param config: the config to test
     """
     assert config.AMBUDA_ENVIRONMENT in {
-        TESTING,
-        DEVELOPMENT,
-        BUILD,
-        STAGING,
-        PRODUCTION,
+        Env.TESTING,
+        Env.DEVELOPMENT,
+        Env.BUILD,
+        Env.STAGING,
+        Env.PRODUCTION,
     }
 
     if not config.SQLALCHEMY_DATABASE_URI:
@@ -250,8 +293,14 @@ def _validate_config(config: BaseConfig):
     if not Path(config.UPLOAD_FOLDER).is_absolute():
         raise ValueError("UPLOAD_FOLDER must be an absolute path.")
 
+    if not config.VIDYUT_DATA_DIR:
+        raise ValueError("This config does not define VIDYUT_DATA_DIR.")
+
+    if not config.SERVER_FILE_CACHE:
+        raise ValueError("This config does not define SERVER_FILE_CACHE.")
+
     # Production-specific validation.
-    if config.AMBUDA_ENVIRONMENT == PRODUCTION:
+    if config.AMBUDA_ENVIRONMENT == Env.PRODUCTION:
         # All keys must be set.
         for key in dir(config):
             if key.isupper():
@@ -272,11 +321,11 @@ def _validate_config(config: BaseConfig):
 def load_config_object(name: str):
     """Load and validate an application config."""
     config_map = {
-        TESTING: UnitTestConfig,
-        DEVELOPMENT: DevelopmentConfig,
-        BUILD: BuildConfig,
-        STAGING: StagingConfig,
-        PRODUCTION: ProductionConfig,
+        Env.TESTING: UnitTestConfig,
+        Env.DEVELOPMENT: DevelopmentConfig,
+        Env.BUILD: BuildConfig,
+        Env.STAGING: StagingConfig,
+        Env.PRODUCTION: ProductionConfig,
     }
     config = config_map[name]
     _validate_config(config)
@@ -289,6 +338,8 @@ def create_config_only_app(config_name: str):
     We use this function in Celery to get access to the app context while
     avoiding any other setup work related to the application.
     """
+    from flask import Flask
+
     load_dotenv(".env")
     app = Flask(__name__)
     app.config.from_object(load_config_object(config_name))

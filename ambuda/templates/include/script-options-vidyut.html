@@ -1,0 +1,20 @@
+{%- set current_script = session.get('script', 'Devanagari') -%}
+{%- macro option(value, label) -%}
+<option value="{{ value }}" {{ 'selected' if current_script == value }}>{{ _(label) }}</option>
+{%- endmacro -%}
+
+{{ option('Devanagari', 'Devanagari') }}
+{{ option('Iast', 'Roman') }}
+{{ option('Bengali', 'Bengali') }}
+{{ option('Brahmi', 'Brahmi') }}
+{{ option('Grantha', 'Grantha') }}
+{{ option('Gujarati', 'Gujarati') }}
+{{ option('Gurmukhi', 'Gurmukhi') }}
+{{ option('Kannada', 'Kannada') }}
+{{ option('Malayalam', 'Malayalam') }}
+{{ option('Newa', 'Newa') }}
+{{ option('Odia', 'Odia') }}
+{{ option('Saurashtra', 'Saurashtra') }}
+{{ option('Sharada', 'Sharada') }}
+{{ option('Sinhala', 'Sinhala') }}
+{{ option('Telugu', 'Telugu') }}

@@ -14,13 +14,13 @@
 {{ components.flash_messages() }}
 
 {{ m.project_header_nested('OCR', project) }}
-{{ m.project_tabs(project=project, active='edit') }}
+{{ m.project_tabs(project=project, active='tools', is_p2=current_user.is_p2) }}
 
 <div class="prose">
   <p>Click the button below to run OCR on every unedited page.</p>
 
   <form method="POST">
-      <input class="btn btn-submit" type="submit" value="Run OCR"></input>
+      <input class="btn btn-submit" type="submit" value="{{ _('Run OCR') }}"></input>
   </form>
 </div>
 {% endblock %}
